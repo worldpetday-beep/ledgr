@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, profitOf, reserveNextCustomerNumber, peekNextCustomerNumber, NEXT_CUSTOMER_NUMBER_KEY, type Currency, type Item, type Sale } from '../db'
 import { Card, Button, Field, inputClass, Badge, Pill, Switch } from '../components/ui'
+import { ItemThumb } from '../components/ItemThumb'
 import { PlusIcon, SearchIcon, TrashIcon } from '../components/icons'
 import { money, startOfDay, endOfDay } from '../lib/format'
 import { format } from 'date-fns'
@@ -301,32 +302,36 @@ function SaleForm() {
 
       <div className="flex flex-col gap-3">
         <Field label="Item">
-          <div className="relative">
-            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-            <input
-              className={inputClass + ' pl-9'}
-              placeholder="Search inventory or type a new item name"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value)
-                setSelected(null)
-                setManualName(e.target.value)
-              }}
-            />
+          <div className="relative flex items-center gap-2">
+            {selected && <ItemThumb image={selected.image} size={36} />}
+            <div className="relative flex-1">
+              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+              <input
+                className={inputClass + ' pl-9'}
+                placeholder="Search inventory or type a new item name"
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  setSelected(null)
+                  setManualName(e.target.value)
+                }}
+              />
             {query && !selected && filtered.length > 0 && (
               <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
                 {filtered.map((it) => (
                   <button
                     key={it.id}
                     onClick={() => pick(it)}
-                    className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-[var(--page-plane)]"
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-[var(--page-plane)]"
                   >
-                    <span>{it.name}</span>
+                    <ItemThumb image={it.image} size={28} />
+                    <span className="flex-1">{it.name}</span>
                     <span className="tabular text-xs text-[var(--text-muted)]">{it.stock} in stock</span>
                   </button>
                 ))}
               </div>
             )}
+            </div>
           </div>
           {!selected && query && (
             <span className="text-xs text-[var(--text-muted)]">Not in inventory — will be added as a new item.</span>

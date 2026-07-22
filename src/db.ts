@@ -14,6 +14,7 @@ export interface Item {
   currency: Currency
   stock: number
   lowStockThreshold: number
+  image?: Blob
   createdAt: number
   updatedAt: number
 }
@@ -91,6 +92,14 @@ db.version(3)
       sale.pickedUp = true
     })
   })
+
+db.version(4).stores({
+  items: '++id, name, category, sku, stock, currency, createdAt, costUnknown',
+  sales: '++id, itemId, itemName, category, currency, timestamp, customerNumber, tbs',
+  categories: '++id, &name',
+  settings: '&key',
+  drawerCounts: '++id, timestamp',
+})
 
 export const EXCHANGE_RATE_KEY = 'exchangeRateLrdPerUsd'
 export const DEFAULT_EXCHANGE_RATE = 180

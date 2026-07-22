@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, DEFAULT_CATEGORIES, type Currency, type Item } from '../db'
-import { Card, Button, Modal, Field, inputClass, Badge, Switch } from '../components/ui'
+import { Card, Button, Modal, Field, inputClass, Badge, Switch, Pill } from '../components/ui'
 import { PlusIcon, SearchIcon, EditIcon, TrashIcon } from '../components/icons'
+import { ItemThumb } from '../components/ItemThumb'
 import { money, isLowStock } from '../lib/format'
 
 const emptyForm = {
@@ -16,6 +17,7 @@ const emptyForm = {
   currency: 'USD' as Currency,
   stock: 0,
   lowStockThreshold: 3,
+  image: undefined as Blob | undefined,
 }
 
 export default function Inventory() {
@@ -24,6 +26,7 @@ export default function Inventory() {
   const [query, setQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('All')
   const [missingCostOnly, setMissingCostOnly] = useState(false)
+  const [view, setView] = useState<'list' | 'visual'>('list')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Item | null>(null)
   const [form, setForm] = useState(emptyForm)
@@ -50,6 +53,16 @@ export default function Inventory() {
     return [...list].sort((a, b) => Number(b.costUnknown) - Number(a.costUnknown) || a.name.localeCompare(b.name))
   }, [items, query, categoryFilter, missingCostOnly])
 
+  const byCategory = useMemo(() => {
+    const groups = new Map<string, Item[]>()
+    for (const item of filtered) {
+      const list = groups.get(item.category) ?? []
+      list.push(item)
+      groups.set(item.category, list)
+    }
+    return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  }, [filtered])
+
   function openAdd() {
     setEditing(null)
     setForm(emptyForm)
@@ -69,6 +82,7 @@ export default function Inventory() {
       currency: item.currency,
       stock: item.stock,
       lowStockThreshold: item.lowStockThreshold,
+      image: item.image,
     })
     setModalOpen(true)
   }
@@ -95,10 +109,13 @@ export default function Inventory() {
           <h1 className="text-xl font-semibold">Inventory Manager</h1>
           <p className="text-sm text-[var(--text-secondary)]">{items?.length ?? 0} SKUs tracked so far</p>
         </div>
-        <Button onClick={openAdd}>
-          <PlusIcon className="h-4 w-4" />
-          Add item
-        </Button>
+        <div className="flex items-center gap-2">
+          <Pill options={[{ label: 'List', value: 'list' }, { label: 'Visual', value: 'visual' }]} value={view} onChange={setView} />
+          <Button onClick={openAdd}>
+            <PlusIcon className="h-4 w-4" />
+            Add item
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -131,69 +148,142 @@ export default function Inventory() {
         )}
       </div>
 
-      <Card>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="text-xs text-[var(--text-muted)]">
-                <th className="pb-2 font-medium">Item</th>
-                <th className="pb-2 font-medium">Category</th>
-                <th className="pb-2 font-medium">Variant</th>
-                <th className="pb-2 font-medium">Stock</th>
-                <th className="pb-2 font-medium">Cost</th>
-                <th className="pb-2 font-medium">Sell</th>
-                <th className="pb-2 font-medium"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((item) => {
-                const low = isLowStock(item.stock, item.lowStockThreshold)
-                return (
-                  <tr key={item.id} className="border-t border-[var(--gridline)]">
-                    <td className="py-2 pr-2 font-medium">{item.name}{item.sku && <span className="ml-1 text-xs text-[var(--text-muted)]">#{item.sku}</span>}</td>
-                    <td className="py-2 pr-2 text-[var(--text-secondary)]">{item.category}</td>
-                    <td className="py-2 pr-2 text-[var(--text-secondary)]">{item.variant || '—'}</td>
-                    <td className="py-2 pr-2">
-                      <span className="tabular">{item.stock}</span>
-                      {low && <Badge tone="critical">Low</Badge>}
-                    </td>
-                    <td className="py-2 pr-2">
-                      {item.costUnknown ? (
-                        <button onClick={() => openEdit(item)}>
-                          <Badge tone="warning">Cost missing</Badge>
-                        </button>
-                      ) : (
-                        <span className="tabular text-[var(--text-muted)]">{money(item.costPrice, item.currency)}</span>
-                      )}
-                    </td>
-                    <td className="tabular py-2 pr-2">{money(item.sellPrice, item.currency)}</td>
-                    <td className="py-2 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button onClick={() => openEdit(item)} className="text-[var(--text-muted)] hover:text-[var(--series-1)]" aria-label="Edit">
-                          <EditIcon className="h-4 w-4" />
-                        </button>
-                        <button onClick={() => item.id && remove(item.id)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Delete">
-                          <TrashIcon className="h-4 w-4" />
-                        </button>
-                      </div>
+      {view === 'list' ? (
+        <Card>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-xs text-[var(--text-muted)]">
+                  <th className="pb-2 font-medium"></th>
+                  <th className="pb-2 font-medium">Item</th>
+                  <th className="pb-2 font-medium">Category</th>
+                  <th className="pb-2 font-medium">Variant</th>
+                  <th className="pb-2 font-medium">Stock</th>
+                  <th className="pb-2 font-medium">Cost</th>
+                  <th className="pb-2 font-medium">Sell</th>
+                  <th className="pb-2 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((item) => {
+                  const low = isLowStock(item.stock, item.lowStockThreshold)
+                  return (
+                    <tr key={item.id} className="border-t border-[var(--gridline)]">
+                      <td className="py-2 pr-2">
+                        <ItemThumb image={item.image} size={32} />
+                      </td>
+                      <td className="py-2 pr-2 font-medium">{item.name}{item.sku && <span className="ml-1 text-xs text-[var(--text-muted)]">#{item.sku}</span>}</td>
+                      <td className="py-2 pr-2 text-[var(--text-secondary)]">{item.category}</td>
+                      <td className="py-2 pr-2 text-[var(--text-secondary)]">{item.variant || '—'}</td>
+                      <td className="py-2 pr-2">
+                        <span className="tabular">{item.stock}</span>
+                        {low && <Badge tone="critical">Low</Badge>}
+                      </td>
+                      <td className="py-2 pr-2">
+                        {item.costUnknown ? (
+                          <button onClick={() => openEdit(item)}>
+                            <Badge tone="warning">Cost missing</Badge>
+                          </button>
+                        ) : (
+                          <span className="tabular text-[var(--text-muted)]">{money(item.costPrice, item.currency)}</span>
+                        )}
+                      </td>
+                      <td className="tabular py-2 pr-2">{money(item.sellPrice, item.currency)}</td>
+                      <td className="py-2 text-right">
+                        <div className="flex justify-end gap-2">
+                          <button onClick={() => openEdit(item)} className="text-[var(--text-muted)] hover:text-[var(--series-1)]" aria-label="Edit">
+                            <EditIcon className="h-4 w-4" />
+                          </button>
+                          <button onClick={() => item.id && remove(item.id)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Delete">
+                            <TrashIcon className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="py-8 text-center text-sm text-[var(--text-muted)]">
+                      No items yet. Add them as you go — you don't need it all at once.
                     </td>
                   </tr>
-                )
-              })}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="py-8 text-center text-sm text-[var(--text-muted)]">
-                    No items yet. Add them as you go — you don't need it all at once.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {byCategory.map(([category, catItems]) => {
+            const maxStock = Math.max(1, ...catItems.map((i) => i.stock))
+            return (
+              <Card key={category}>
+                <h2 className="mb-3 text-sm font-semibold">{category}</h2>
+                <div className="flex flex-wrap gap-2.5">
+                  {catItems.map((item) => {
+                    const low = isLowStock(item.stock, item.lowStockThreshold)
+                    const ok = item.stock > item.lowStockThreshold * 2
+                    const tone = low ? 'critical' : ok ? 'good' : 'warning'
+                    const scale = 0.85 + 0.65 * Math.min(1, item.stock / maxStock)
+                    const toneColor =
+                      tone === 'critical' ? 'var(--status-critical)' : tone === 'good' ? 'var(--status-good)' : 'var(--status-warning)'
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => openEdit(item)}
+                        style={{
+                          borderColor: toneColor,
+                          transform: `scale(${scale})`,
+                          transformOrigin: 'center',
+                        }}
+                        className="flex min-w-[110px] flex-col items-center gap-1.5 rounded-xl border-2 bg-[var(--page-plane)] px-3 py-2.5 text-center transition-transform"
+                      >
+                        <ItemThumb image={item.image} size={36} />
+                        <span className="line-clamp-1 text-xs font-medium">{item.name}</span>
+                        <span className="tabular text-sm font-semibold" style={{ color: toneColor }}>
+                          {item.stock}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </Card>
+            )
+          })}
+          {byCategory.length === 0 && (
+            <Card>
+              <p className="py-4 text-center text-sm text-[var(--text-muted)]">
+                No items yet. Add them as you go — you don't need it all at once.
+              </p>
+            </Card>
+          )}
         </div>
-      </Card>
+      )}
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit item' : 'Add item'}>
         <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-3">
+            <ItemThumb image={form.image} size={56} />
+            <label className="cursor-pointer text-sm font-medium text-[var(--series-1)]">
+              {form.image ? 'Change photo' : 'Add photo'}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) setForm({ ...form, image: file })
+                }}
+              />
+            </label>
+            {form.image && (
+              <button onClick={() => setForm({ ...form, image: undefined })} className="text-sm text-[var(--text-muted)] hover:text-[var(--status-critical)]">
+                Remove
+              </button>
+            )}
+          </div>
           <Field label="Name">
             <input className={inputClass} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
