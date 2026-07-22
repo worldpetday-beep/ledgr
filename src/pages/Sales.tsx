@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, profitOf, type Currency, type Sale } from '../db'
+import { db, type Currency, type Sale } from '../db'
 import { Card, Button, inputClass, Badge } from '../components/ui'
 import { PlusIcon, TrashIcon, EditIcon, SearchIcon } from '../components/icons'
 import { useAppActions } from '../context/AppActions'
@@ -87,20 +87,6 @@ export default function Sales() {
     return Array.from(map.values())
   }, [filteredOrders])
 
-  const todayKey = dateKeyMonrovia(Date.now())
-  const totals = useMemo(() => {
-    const t: Record<Currency, { sales: number; profit: number }> = {
-      USD: { sales: 0, profit: 0 },
-      LRD: { sales: 0, profit: 0 },
-    }
-    for (const s of allSales ?? []) {
-      if (dateKeyMonrovia(s.timestamp) !== todayKey) continue
-      t[s.currency].sales += s.soldFor
-      t[s.currency].profit += profitOf(s)
-    }
-    return t
-  }, [allSales, todayKey])
-
   async function deleteSale(sale: Sale) {
     await db.transaction('rw', db.sales, db.variants, async () => {
       await db.sales.delete(sale.id!)
@@ -145,25 +131,6 @@ export default function Sales() {
           <PlusIcon className="h-4 w-4" />
           Record sale
         </Button>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Card>
-          <div className="text-xs font-medium text-[var(--text-muted)]">Today's sales (USD)</div>
-          <div className="tabular text-lg font-semibold">{money(totals.USD.sales, 'USD')}</div>
-        </Card>
-        <Card>
-          <div className="text-xs font-medium text-[var(--text-muted)]">Today's profit (USD)</div>
-          <div className="tabular text-lg font-semibold text-[var(--status-good)]">{money(totals.USD.profit, 'USD')}</div>
-        </Card>
-        <Card>
-          <div className="text-xs font-medium text-[var(--text-muted)]">Today's sales (LRD)</div>
-          <div className="tabular text-lg font-semibold">{money(totals.LRD.sales, 'LRD')}</div>
-        </Card>
-        <Card>
-          <div className="text-xs font-medium text-[var(--text-muted)]">Today's profit (LRD)</div>
-          <div className="tabular text-lg font-semibold text-[var(--status-good)]">{money(totals.LRD.profit, 'LRD')}</div>
-        </Card>
       </div>
 
       <div className="relative">
@@ -215,41 +182,39 @@ export default function Sales() {
                   <Card key={order.orderNumber} className="py-3">
                     <button className="w-full text-left" onClick={() => setExpandedOrderNumber(expanded ? null : order.orderNumber)}>
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="font-semibold">#{order.orderNumber}</div>
-                          <div className="flex items-center gap-1">
-                            {editingOrderNumber === order.orderNumber ? (
-                              <input
-                                autoFocus
-                                className={inputClass + ' w-32 py-1 text-xs'}
-                                value={editValue}
-                                placeholder={`Customer ${String(order.customerNumber).padStart(3, '0')}`}
-                                onChange={(e) => setEditValue(e.target.value)}
-                                onBlur={() => saveEdit(order)}
-                                onKeyDown={(e) => e.key === 'Enter' && saveEdit(order)}
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                            ) : (
-                              <>
-                                <span className="truncate text-sm text-[var(--text-secondary)]">{label}</span>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    startEdit(order)
-                                  }}
-                                  className="text-[var(--text-muted)] hover:text-[var(--series-1)]"
-                                  aria-label="Rename customer"
-                                >
-                                  <EditIcon className="h-3 w-3" />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </div>
+                        <div className="min-w-0 font-semibold">#{order.orderNumber}</div>
                         <div className="tabular shrink-0 text-right text-base font-bold">{formatCurrencyTotals(order.totals)}</div>
                       </div>
-                      <div className="mt-1 truncate text-sm text-[var(--text-muted)]">
-                        {label} · {itemCount} item{itemCount === 1 ? '' : 's'} · {formatTimeMonrovia(order.timestamp)}
+                      <div className="mt-1 flex min-w-0 items-center gap-1 text-sm text-[var(--text-muted)]">
+                        {editingOrderNumber === order.orderNumber ? (
+                          <input
+                            autoFocus
+                            className={inputClass + ' w-32 shrink-0 py-1 text-xs'}
+                            value={editValue}
+                            placeholder={`Customer ${String(order.customerNumber).padStart(3, '0')}`}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            onBlur={() => saveEdit(order)}
+                            onKeyDown={(e) => e.key === 'Enter' && saveEdit(order)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        ) : (
+                          <>
+                            <span className="shrink-0 truncate font-medium text-[var(--text-secondary)]">{label}</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                startEdit(order)
+                              }}
+                              className="shrink-0 text-[var(--text-muted)] hover:text-[var(--series-1)]"
+                              aria-label="Rename customer"
+                            >
+                              <EditIcon className="h-3 w-3" />
+                            </button>
+                          </>
+                        )}
+                        <span className="truncate">
+                          · {itemCount} item{itemCount === 1 ? '' : 's'} · {formatTimeMonrovia(order.timestamp)}
+                        </span>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {!order.anyTbs && <Badge tone="muted">Delivered</Badge>}

@@ -15,14 +15,16 @@ export function StatTile({
   value,
   sub,
   accent,
+  className = '',
 }: {
   label: string
   value: string
   sub?: string
   accent?: string
+  className?: string
 }) {
   return (
-    <Card className="flex flex-col gap-1">
+    <Card className={`flex flex-col gap-1 ${className}`}>
       <div className="text-xs font-medium text-[var(--text-muted)]">{label}</div>
       <div className="tabular text-2xl font-semibold" style={accent ? { color: accent } : undefined}>
         {value}

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, profitOf, type Currency } from '../db'
+import { db, type Currency } from '../db'
 import { Card, StatTile, Badge } from '../components/ui'
 import { AlertIcon } from '../components/icons'
 import { money, startOfDay, endOfDay, isLowStock } from '../lib/format'
@@ -37,17 +37,21 @@ export default function Dashboard() {
   }, [variants, products])
 
   const totalsByCurrency = useMemo(() => {
-    const totals: Record<Currency, { sales: number; profit: number; count: number }> = {
-      USD: { sales: 0, profit: 0, count: 0 },
-      LRD: { sales: 0, profit: 0, count: 0 },
+    const totals: Record<Currency, { sales: number; count: number }> = {
+      USD: { sales: 0, count: 0 },
+      LRD: { sales: 0, count: 0 },
     }
     for (const s of todaySales ?? []) {
       totals[s.currency].sales += s.soldFor
-      totals[s.currency].profit += profitOf(s)
       totals[s.currency].count += 1
     }
     return totals
   }, [todaySales])
+
+  const uniqueCustomersToday = useMemo(
+    () => new Set((todaySales ?? []).map((s) => s.customerNumber)).size,
+    [todaySales],
+  )
 
   const trend = useLiveQuery(async () => {
     const from = startOfDay(subDays(Date.now(), 13).getTime())
@@ -72,11 +76,15 @@ export default function Dashboard() {
         <p className="text-sm text-[var(--text-secondary)]">Today, {format(Date.now(), 'EEEE MMM d')}</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
         <StatTile label="Sales today (USD)" value={money(totalsByCurrency.USD.sales, 'USD')} sub={`${totalsByCurrency.USD.count} sales`} />
-        <StatTile label="Profit today (USD)" value={money(totalsByCurrency.USD.profit, 'USD')} accent="var(--status-good)" />
         <StatTile label="Sales today (LRD)" value={money(totalsByCurrency.LRD.sales, 'LRD')} sub={`${totalsByCurrency.LRD.count} sales`} />
-        <StatTile label="Profit today (LRD)" value={money(totalsByCurrency.LRD.profit, 'LRD')} accent="var(--status-good)" />
+        <StatTile
+          label="Customers today"
+          value={String(uniqueCustomersToday)}
+          sub={uniqueCustomersToday === 1 ? 'unique customer' : 'unique customers'}
+          className="col-span-2 md:col-span-1"
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

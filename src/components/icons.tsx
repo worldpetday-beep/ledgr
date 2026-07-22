@@ -90,3 +90,29 @@ export function SearchIcon({ className }: IconProps) {
     </svg>
   )
 }
+
+export function HomeIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M3 11l9-7 9 7" />
+      <path d="M5 10v10h14V10" />
+    </svg>
+  )
+}
+
+export function MenuIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </svg>
+  )
+}
+
+export function UserIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21c0-4 4-6.5 8-6.5s8 2.5 8 6.5" />
+    </svg>
+  )
+}
