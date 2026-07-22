@@ -101,10 +101,12 @@ export function BottomSheet({
   open,
   onClose,
   children,
+  contentClassName = '',
 }: {
   open: boolean
   onClose: () => void
   children: ReactNode
+  contentClassName?: string
 }) {
   const [dragY, setDragY] = useState(0)
   const dragging = useRef(false)
@@ -138,11 +140,11 @@ export function BottomSheet({
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 md:items-center" onClick={onClose}>
       <div
         style={{ transform: `translateY(${dragY}px)`, transition: dragY === 0 ? 'transform 0.2s ease-out' : 'none' }}
-        className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-[var(--surface-1)] md:max-w-lg md:rounded-2xl"
+        className={`max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-[var(--surface-1)] md:max-w-lg md:rounded-2xl ${contentClassName}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div
-          className="sticky top-0 z-10 flex cursor-grab touch-none justify-center bg-[var(--surface-1)] py-2 active:cursor-grabbing"
+          className="sticky top-0 z-10 flex cursor-grab touch-none justify-center bg-inherit py-2 active:cursor-grabbing"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}

@@ -116,3 +116,30 @@ export function UserIcon({ className }: IconProps) {
     </svg>
   )
 }
+
+export function MoreVerticalIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" className={className}>
+      <circle cx="12" cy="5" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="12" cy="19" r="1.6" />
+    </svg>
+  )
+}
+
+export function SortIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M7 4v16M7 20l-3-3M7 20l3-3" />
+      <path d="M17 20V4M17 4l-3 3M17 4l3 3" />
+    </svg>
+  )
+}
+
+export function FilterIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M4 5h16M7 12h10M10 19h4" />
+    </svg>
+  )
+}

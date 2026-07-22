@@ -52,6 +52,7 @@ function AppShell() {
   const nextToastId = useRef(1)
   const location = useLocation()
   const moreSectionActive = location.pathname.startsWith('/analytics') || location.pathname.startsWith('/settings')
+  const fullBleed = location.pathname === '/sales' || location.pathname === '/inventory'
 
   function showToast(text: string, tone: 'success' | 'error' = 'success') {
     const id = nextToastId.current++
@@ -92,17 +93,22 @@ function AppShell() {
           </div>
         </aside>
 
-        {/* Main content */}
+        {/* Main content — Sales & Inventory own their full-bleed black/white shell, everything else gets the standard padded container */}
         <main className="flex-1 overflow-y-auto pb-24 md:pb-0">
-          <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-8 md:py-8">
+          {fullBleed ? (
             <Routes>
-              <Route path="/" element={<Dashboard />} />
               <Route path="/sales" element={<Sales />} />
               <Route path="/inventory" element={<Inventory />} />
-              <Route path="/analytics" element={<Analytics />} />
-              <Route path="/settings" element={<Settings />} />
             </Routes>
-          </div>
+          ) : (
+            <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-8 md:py-8">
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/analytics" element={<Analytics />} />
+                <Route path="/settings" element={<Settings />} />
+              </Routes>
+            </div>
+          )}
         </main>
 
         {/* Floating action button — opens Record Sale from anywhere */}

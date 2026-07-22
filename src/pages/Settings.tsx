@@ -61,7 +61,7 @@ export default function Settings() {
         if (Array.isArray(data.products)) {
           for (const product of data.products) {
             const { id, ...rest } = product
-            const newId = (await db.products.add(rest)) as number
+            const newId = (await db.products.add({ archived: false, ...rest })) as number
             if (id != null) productIdMap.set(id, newId)
           }
         }

@@ -258,7 +258,7 @@ export function RecordSaleSheet({
                 variantLabel = newLabel
               }
             } else {
-              productId = (await db.products.add({ name: line.name, category: 'General', createdAt: now, updatedAt: now })) as number
+              productId = (await db.products.add({ name: line.name, category: 'General', archived: false, createdAt: now, updatedAt: now })) as number
               productCategory = 'General'
               variantLabel = line.manualVariant.trim() || 'Standard'
               variantId = await db.variants.add({

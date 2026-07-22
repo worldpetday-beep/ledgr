@@ -9,6 +9,7 @@ export interface Product {
   name: string
   category: string
   image?: Blob
+  archived: boolean // true = deactivated/discontinued, hidden from the main product feed
   createdAt: number
   updatedAt: number
 }
@@ -260,6 +261,19 @@ export function peekNextCustomerNumber(row: Setting | undefined): number {
 }
 
 export { NEXT_CUSTOMER_NUMBER_KEY }
+
+// v8: add an "archived" flag to products so discontinued/seasonal items can
+// be hidden from the main feed without deleting their history. Existing
+// products default to not archived.
+db.version(8)
+  .stores({
+    products: '++id, name, category, createdAt, archived',
+  })
+  .upgrade(async (tx) => {
+    await tx.table('products').toCollection().modify((product) => {
+      product.archived = false
+    })
+  })
 
 export const NEXT_ORDER_NUMBER_KEY = 'nextOrderNumber'
 export const ORDER_NUMBER_BASE = 1000
