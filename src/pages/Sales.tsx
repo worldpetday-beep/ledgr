@@ -235,10 +235,14 @@ function SaleForm({ focusToken }: { focusToken: number }) {
   const [costUnknown, setCostUnknown] = useState(true)
   const [sameAsLast, setSameAsLast] = useState(false)
   const [tbs, setTbs] = useState(false)
+  const [manualVariant, setManualVariant] = useState('')
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
   const qtyRef = useRef<HTMLInputElement>(null)
   const customUnitRef = useRef<HTMLInputElement>(null)
   const itemInputRef = useRef<HTMLInputElement>(null)
+  const variantRef = useRef<HTMLInputElement>(null)
   const soldForRef = useRef<HTMLInputElement>(null)
   const unitChipRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
@@ -291,78 +295,105 @@ function SaleForm({ focusToken }: { focusToken: number }) {
   }
 
   const costTotal = selected ? selected.costPrice * qty : costUnknown ? 0 : manualCost
-  const profitPreview = soldFor - costTotal
 
   async function submit() {
+    setSaveError(null)
+
     const name = selected ? selected.name : manualName.trim()
-    if (!name || qty <= 0 || soldFor < 0) return
+    if (!name) {
+      setSaveError('Enter an item name, or pick one from the inventory search.')
+      return
+    }
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setSaveError('Quantity must be at least 1.')
+      return
+    }
+    if (!Number.isFinite(soldFor) || soldFor < 0) {
+      setSaveError("Sold for can't be negative.")
+      return
+    }
 
-    await db.transaction('rw', db.sales, db.items, db.settings, async () => {
-      const customerNumber = sameAsLast && lastSale ? lastSale.customerNumber : await reserveNextCustomerNumber()
+    setSaving(true)
+    try {
+      await db.transaction('rw', db.sales, db.items, db.settings, async () => {
+        const customerNumber = sameAsLast && lastSale ? lastSale.customerNumber : await reserveNextCustomerNumber()
 
-      let itemId = selected?.id
-      let itemCategory = selected?.category
-      let itemVariant = selected?.variant
+        let itemId = selected?.id
+        let itemCategory = selected?.category
+        let itemVariant = selected?.variant
 
-      // Quick sale of an item not picked from inventory: link to an existing
-      // item with the same name, or create a new catalog entry for it so it
-      // shows up in Inventory (flagged if the cost wasn't entered).
-      if (!selected) {
-        const existing = await db.items.where('name').equalsIgnoreCase(name).first()
-        if (existing) {
-          itemId = existing.id
-          itemCategory = existing.category
-          itemVariant = existing.variant
-        } else {
-          const now = Date.now()
-          itemId = await db.items.add({
-            name,
-            category: 'General',
-            variant: '',
-            costPrice: costUnknown ? 0 : manualCost,
-            costUnknown,
-            sellPrice: qty > 0 ? soldFor / qty : soldFor,
-            currency,
-            stock: 0,
-            lowStockThreshold: 3,
-            createdAt: now,
-            updatedAt: now,
-          })
+        // Quick sale of an item not picked from inventory: link to an existing
+        // item with the same name, or create a new catalog entry for it so it
+        // shows up in Inventory (flagged if the cost wasn't entered).
+        if (!selected) {
+          const existing = await db.items.where('name').equalsIgnoreCase(name).first()
+          if (existing) {
+            itemId = existing.id
+            itemCategory = existing.category
+            itemVariant = manualVariant.trim() || existing.variant
+          } else {
+            const now = Date.now()
+            itemId = await db.items.add({
+              name,
+              category: 'General',
+              variant: manualVariant.trim(),
+              costPrice: costUnknown ? 0 : manualCost,
+              costUnknown,
+              sellPrice: qty > 0 ? soldFor / qty : soldFor,
+              currency,
+              stock: 0,
+              lowStockThreshold: 3,
+              createdAt: now,
+              updatedAt: now,
+            })
+            itemVariant = manualVariant.trim()
+          }
         }
-      }
 
-      await db.sales.add({
-        itemId,
-        itemName: name,
-        category: itemCategory,
-        variant: itemVariant,
-        qty,
-        unitType: unitType === 'Other' ? customUnit.trim() || undefined : unitType,
-        soldFor,
-        costAtSale: costTotal,
-        currency,
-        timestamp: Date.now(),
-        customerNumber,
-        tbs,
-        pickedUp: !tbs,
+        await db.sales.add({
+          itemId,
+          itemName: name,
+          category: itemCategory,
+          variant: itemVariant,
+          qty,
+          unitType: unitType === 'Other' ? customUnit.trim() || undefined : unitType,
+          soldFor,
+          costAtSale: costTotal,
+          currency,
+          timestamp: Date.now(),
+          customerNumber,
+          tbs,
+          pickedUp: !tbs,
+        })
+
+        if (!tbs && itemId) {
+          const fresh = await db.items.get(itemId)
+          if (fresh) {
+            await db.items.update(itemId, {
+              stock: Math.max(0, fresh.stock - qty),
+              updatedAt: Date.now(),
+            })
+          }
+        }
       })
-
-      if (!tbs && itemId) {
-        const fresh = await db.items.get(itemId)
-        if (fresh) {
-          await db.items.update(itemId, {
-            stock: Math.max(0, fresh.stock - qty),
-            updatedAt: Date.now(),
-          })
-        }
-      }
-    })
+    } catch (err) {
+      console.error('Failed to record sale', err)
+      setSaveError(
+        err instanceof Error
+          ? `Could not save this sale: ${err.message}`
+          : 'Could not save this sale. Please try again.',
+      )
+      setSaving(false)
+      return
+    }
+    setSaving(false)
 
     setSelected(null)
     setQuery('')
     setQty(1)
     setUnitType('Piece')
     setCustomUnit('')
+    setManualVariant('')
     setSoldFor(0)
     setManualName('')
     setManualCost(0)
@@ -457,7 +488,7 @@ function SaleForm({ focusToken }: { focusToken: number }) {
                   setSelected(null)
                   setManualName(e.target.value)
                 }}
-                onKeyDown={onEnterAdvance(() => soldForRef.current?.focus())}
+                onKeyDown={onEnterAdvance(() => (selected ? soldForRef : variantRef).current?.focus())}
                 enterKeyHint="next"
               />
             {query && !selected && filtered.length > 0 && (
@@ -481,6 +512,20 @@ function SaleForm({ focusToken }: { focusToken: number }) {
             <span className="text-xs text-[var(--text-muted)]">Not in inventory — will be added as a new item.</span>
           )}
         </Field>
+
+        {!selected && (
+          <Field label="Variant / size (optional)">
+            <input
+              ref={variantRef}
+              className={inputClass}
+              placeholder={'e.g. Blue, 4" or 3"'}
+              value={manualVariant}
+              onChange={(e) => setManualVariant(e.target.value)}
+              onKeyDown={onEnterAdvance(() => soldForRef.current?.focus())}
+              enterKeyHint="next"
+            />
+          </Field>
+        )}
 
         <Field label="Sold for (total)">
           <input
@@ -519,11 +564,16 @@ function SaleForm({ focusToken }: { focusToken: number }) {
         <Switch checked={tbs} onChange={setTbs} label="TBS — customer paid, will pick up goods later" />
       </div>
 
-      <div className="mt-4 flex items-center justify-between border-t border-[var(--gridline)] pt-3">
-        <div className="text-sm text-[var(--text-secondary)]">
-          Profit preview: <span className="tabular font-semibold text-[var(--status-good)]">{money(profitPreview, currency)}</span>
+      {saveError && (
+        <div className="mt-3 rounded-lg bg-[var(--status-critical)]/10 px-3 py-2 text-sm text-[var(--status-critical)]">
+          {saveError}
         </div>
-        <Button onClick={submit}>Record sale</Button>
+      )}
+
+      <div className="mt-4 flex items-center justify-end border-t border-[var(--gridline)] pt-3">
+        <Button onClick={submit} disabled={saving}>
+          {saving ? 'Saving…' : 'Record sale'}
+        </Button>
       </div>
     </Card>
   )
