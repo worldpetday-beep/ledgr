@@ -26,12 +26,15 @@ export default function Dashboard() {
     [todayStart, todayEnd],
   )
 
-  const items = useLiveQuery(() => db.items.toArray(), [])
+  const products = useLiveQuery(() => db.products.toArray(), [])
+  const variants = useLiveQuery(() => db.variants.toArray(), [])
 
-  const lowStockItems = useMemo(
-    () => (items ?? []).filter((it) => isLowStock(it.stock, it.lowStockThreshold)),
-    [items],
-  )
+  const lowStockVariants = useMemo(() => {
+    const productMap = new Map((products ?? []).map((p) => [p.id, p]))
+    return (variants ?? [])
+      .filter((v) => isLowStock(v.stock, v.lowStockThreshold))
+      .map((v) => ({ ...v, productName: productMap.get(v.productId)?.name ?? 'Unknown item' }))
+  }, [variants, products])
 
   const totalsByCurrency = useMemo(() => {
     const totals: Record<Currency, { sales: number; profit: number; count: number }> = {
@@ -137,19 +140,22 @@ export default function Dashboard() {
         <Card>
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-semibold">Low stock alerts</h2>
-            {lowStockItems.length > 0 && <Badge tone="critical">{lowStockItems.length}</Badge>}
+            {lowStockVariants.length > 0 && <Badge tone="critical">{lowStockVariants.length}</Badge>}
           </div>
-          {lowStockItems.length === 0 ? (
+          {lowStockVariants.length === 0 ? (
             <p className="text-sm text-[var(--text-muted)]">Nothing low on stock right now.</p>
           ) : (
             <ul className="flex flex-col gap-2">
-              {lowStockItems.slice(0, 6).map((it) => (
-                <li key={it.id} className="flex items-center justify-between gap-2 text-sm">
+              {lowStockVariants.slice(0, 6).map((v) => (
+                <li key={v.id} className="flex items-center justify-between gap-2 text-sm">
                   <span className="flex items-center gap-1.5 truncate">
                     <AlertIcon className="h-3.5 w-3.5 shrink-0 text-[var(--status-critical)]" />
-                    <span className="truncate">{it.name}</span>
+                    <span className="truncate">
+                      {v.productName}
+                      {v.label && v.label !== 'Standard' ? ` — ${v.label}` : ''}
+                    </span>
                   </span>
-                  <span className="tabular shrink-0 text-[var(--status-critical)]">{it.stock} left</span>
+                  <span className="tabular shrink-0 text-[var(--status-critical)]">{v.stock} left</span>
                 </li>
               ))}
             </ul>

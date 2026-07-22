@@ -2,11 +2,21 @@ import Dexie, { type EntityTable } from 'dexie'
 
 export type Currency = 'USD' | 'LRD'
 
-export interface Item {
+export const UNIT_TYPES = ['Piece', 'Carton', 'Sheet', 'Bundle', 'Yard', 'Gallon', 'Bucket', 'Pack', 'Other']
+
+export interface Product {
   id?: number
   name: string
   category: string
-  variant: string // free text: size, color, pack, etc.
+  image?: Blob
+  createdAt: number
+  updatedAt: number
+}
+
+export interface Variant {
+  id?: number
+  productId: number
+  label: string // e.g. "Double, Foam, Grade A", "Blue Gallon", or "Standard"
   sku?: string
   costPrice: number
   costUnknown: boolean // true when cost hasn't been entered yet (quick sale of a walk-in item)
@@ -14,17 +24,18 @@ export interface Item {
   currency: Currency
   stock: number
   lowStockThreshold: number
-  image?: Blob
+  order: number // ordering for cheap -> premium display; lower sorts first
   createdAt: number
   updatedAt: number
 }
 
 export interface Sale {
   id?: number
-  itemId?: number // undefined if item wasn't in inventory yet
-  itemName: string
+  productId?: number
+  variantId?: number
+  itemName: string // product name at time of sale
   category?: string
-  variant?: string
+  variant?: string // variant/size label at time of sale
   qty: number
   unitType?: string // Carton, Sheet, Bundle, Yard, Gallon, Bucket, Piece, Pack, or a custom unit
   soldFor: number // total sale price for the qty
@@ -40,6 +51,7 @@ export interface Sale {
 export interface Category {
   id?: number
   name: string
+  allowedUnits?: string[] // undefined/empty = all unit types allowed
 }
 
 export interface Setting {
@@ -56,7 +68,8 @@ export interface DrawerCount {
 }
 
 export const db = new Dexie('LedgrDB') as Dexie & {
-  items: EntityTable<Item, 'id'>
+  products: EntityTable<Product, 'id'>
+  variants: EntityTable<Variant, 'id'>
   sales: EntityTable<Sale, 'id'>
   categories: EntityTable<Category, 'id'>
   settings: EntityTable<Setting, 'key'>
@@ -102,6 +115,59 @@ db.version(4).stores({
   settings: '&key',
   drawerCounts: '++id, timestamp',
 })
+
+// v5: split the old flat "items" catalog into Products (name/category/image)
+// each holding one or more Variants (their own cost/sell price and stock).
+// Every existing item becomes a product with exactly one variant so nothing
+// is lost, and existing sales get remapped from itemId to productId/variantId.
+db.version(5)
+  .stores({
+    items: null,
+    products: '++id, name, category, createdAt',
+    variants: '++id, productId, label, sku, stock, costUnknown, order',
+    sales: '++id, productId, variantId, itemName, category, currency, timestamp, customerNumber, tbs',
+    categories: '++id, &name',
+    settings: '&key',
+    drawerCounts: '++id, timestamp',
+  })
+  .upgrade(async (tx) => {
+    const oldItems = await tx.table('items').toArray()
+    const idMap = new Map<number, { productId: number; variantId: number }>()
+
+    for (const item of oldItems) {
+      const productId = await tx.table('products').add({
+        name: item.name,
+        category: item.category,
+        image: item.image,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      })
+      const variantId = await tx.table('variants').add({
+        productId,
+        label: (item.variant && item.variant.trim()) || 'Standard',
+        sku: item.sku,
+        costPrice: item.costPrice,
+        costUnknown: item.costUnknown,
+        sellPrice: item.sellPrice,
+        currency: item.currency,
+        stock: item.stock,
+        lowStockThreshold: item.lowStockThreshold,
+        order: 0,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      })
+      idMap.set(item.id, { productId, variantId })
+    }
+
+    await tx.table('sales').toCollection().modify((sale) => {
+      const mapped = sale.itemId != null ? idMap.get(sale.itemId) : undefined
+      if (mapped) {
+        sale.productId = mapped.productId
+        sale.variantId = mapped.variantId
+      }
+      delete sale.itemId
+    })
+  })
 
 export const EXCHANGE_RATE_KEY = 'exchangeRateLrdPerUsd'
 export const DEFAULT_EXCHANGE_RATE = 180

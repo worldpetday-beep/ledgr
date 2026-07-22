@@ -1,105 +1,240 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, DEFAULT_CATEGORIES, type Currency, type Item } from '../db'
+import { db, DEFAULT_CATEGORIES, UNIT_TYPES, type Currency, type Product, type Variant } from '../db'
 import { Card, Button, Modal, Field, inputClass, Badge, Switch, Pill } from '../components/ui'
-import { PlusIcon, SearchIcon, EditIcon, TrashIcon } from '../components/icons'
+import { PlusIcon, SearchIcon, EditIcon, TrashIcon, SettingsIcon } from '../components/icons'
 import { ItemThumb } from '../components/ItemThumb'
 import { money, isLowStock, selectOnFocus } from '../lib/format'
 
-const emptyForm = {
+interface VariantRow {
+  key: string
+  id?: number
+  label: string
+  sku: string
+  costPrice: number
+  costUnknown: boolean
+  sellPrice: number
+  currency: Currency
+  stock: number
+  lowStockThreshold: number
+}
+
+function blankVariantRow(order: number): VariantRow {
+  return {
+    key: `new-${Date.now()}-${order}-${Math.random().toString(36).slice(2)}`,
+    label: order === 0 ? 'Standard' : '',
+    sku: '',
+    costPrice: 0,
+    costUnknown: true,
+    sellPrice: 0,
+    currency: 'USD',
+    stock: 0,
+    lowStockThreshold: 3,
+  }
+}
+
+const emptyProductForm = {
   name: '',
   category: DEFAULT_CATEGORIES[0],
-  variant: '',
-  sku: '',
-  costPrice: 0,
-  costUnknown: false,
-  sellPrice: 0,
-  currency: 'USD' as Currency,
-  stock: 0,
-  lowStockThreshold: 3,
   image: undefined as Blob | undefined,
 }
 
 export default function Inventory() {
-  const items = useLiveQuery(() => db.items.orderBy('name').toArray(), [])
+  const products = useLiveQuery(() => db.products.orderBy('name').toArray(), [])
+  const allVariants = useLiveQuery(() => db.variants.toArray(), [])
   const categories = useLiveQuery(() => db.categories.toArray(), [])
+
   const [query, setQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('All')
   const [missingCostOnly, setMissingCostOnly] = useState(false)
   const [view, setView] = useState<'list' | 'visual'>('list')
-  const [modalOpen, setModalOpen] = useState(false)
-  const [editing, setEditing] = useState<Item | null>(null)
-  const [form, setForm] = useState(emptyForm)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
 
-  const missingCostCount = useMemo(() => (items ?? []).filter((i) => i.costUnknown).length, [items])
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
+  const [productForm, setProductForm] = useState(emptyProductForm)
+  const [variantRows, setVariantRows] = useState<VariantRow[]>([blankVariantRow(0)])
+
+  const [unitsModalOpen, setUnitsModalOpen] = useState(false)
+  const [unitsCategoryName, setUnitsCategoryName] = useState('')
+  const [unitsDraft, setUnitsDraft] = useState<string[]>([])
+
+  const variantsByProduct = useMemo(() => {
+    const map = new Map<number, Variant[]>()
+    for (const v of allVariants ?? []) {
+      const list = map.get(v.productId) ?? []
+      list.push(v)
+      map.set(v.productId, list)
+    }
+    for (const list of map.values()) list.sort((a, b) => a.order - b.order || a.sellPrice - b.sellPrice)
+    return map
+  }, [allVariants])
 
   const allCategories = useMemo(() => {
-    const fromItems = new Set((items ?? []).map((i) => i.category))
+    const fromProducts = new Set((products ?? []).map((p) => p.category))
     const fromDb = new Set((categories ?? []).map((c) => c.name))
-    return Array.from(new Set([...DEFAULT_CATEGORIES, ...fromDb, ...fromItems])).sort()
-  }, [items, categories])
+    return Array.from(new Set([...DEFAULT_CATEGORIES, ...fromDb, ...fromProducts])).sort()
+  }, [products, categories])
+
+  const missingCostCount = useMemo(
+    () => (allVariants ?? []).filter((v) => v.costUnknown).length,
+    [allVariants],
+  )
 
   const filtered = useMemo(() => {
-    let list = items ?? []
-    if (categoryFilter !== 'All') list = list.filter((i) => i.category === categoryFilter)
-    if (missingCostOnly) list = list.filter((i) => i.costUnknown)
+    let list = products ?? []
+    if (categoryFilter !== 'All') list = list.filter((p) => p.category === categoryFilter)
+    if (missingCostOnly) list = list.filter((p) => (variantsByProduct.get(p.id!) ?? []).some((v) => v.costUnknown))
     if (query.trim()) {
       const q = query.toLowerCase()
-      list = list.filter(
-        (i) => i.name.toLowerCase().includes(q) || i.sku?.toLowerCase().includes(q) || i.variant.toLowerCase().includes(q),
-      )
+      list = list.filter((p) => {
+        if (p.name.toLowerCase().includes(q)) return true
+        return (variantsByProduct.get(p.id!) ?? []).some(
+          (v) => v.label.toLowerCase().includes(q) || v.sku?.toLowerCase().includes(q),
+        )
+      })
     }
-    // Items missing a cost float to the top so they're easy to fill in.
-    return [...list].sort((a, b) => Number(b.costUnknown) - Number(a.costUnknown) || a.name.localeCompare(b.name))
-  }, [items, query, categoryFilter, missingCostOnly])
+    return [...list].sort((a, b) => {
+      const aMissing = (variantsByProduct.get(a.id!) ?? []).some((v) => v.costUnknown)
+      const bMissing = (variantsByProduct.get(b.id!) ?? []).some((v) => v.costUnknown)
+      return Number(bMissing) - Number(aMissing) || a.name.localeCompare(b.name)
+    })
+  }, [products, query, categoryFilter, missingCostOnly, variantsByProduct])
 
   const byCategory = useMemo(() => {
-    const groups = new Map<string, Item[]>()
-    for (const item of filtered) {
-      const list = groups.get(item.category) ?? []
-      list.push(item)
-      groups.set(item.category, list)
+    const groups = new Map<string, Product[]>()
+    for (const p of filtered) {
+      const list = groups.get(p.category) ?? []
+      list.push(p)
+      groups.set(p.category, list)
     }
     return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]))
   }, [filtered])
 
   function openAdd() {
-    setEditing(null)
-    setForm(emptyForm)
+    setEditingProduct(null)
+    setProductForm(emptyProductForm)
+    setVariantRows([blankVariantRow(0)])
     setModalOpen(true)
   }
 
-  function openEdit(item: Item) {
-    setEditing(item)
-    setForm({
-      name: item.name,
-      category: item.category,
-      variant: item.variant,
-      sku: item.sku ?? '',
-      costPrice: item.costPrice,
-      costUnknown: item.costUnknown,
-      sellPrice: item.sellPrice,
-      currency: item.currency,
-      stock: item.stock,
-      lowStockThreshold: item.lowStockThreshold,
-      image: item.image,
+  function openEdit(product: Product) {
+    setEditingProduct(product)
+    setProductForm({ name: product.name, category: product.category, image: product.image })
+    const variants = variantsByProduct.get(product.id!) ?? []
+    setVariantRows(
+      variants.length > 0
+        ? variants.map((v) => ({
+            key: String(v.id),
+            id: v.id,
+            label: v.label,
+            sku: v.sku ?? '',
+            costPrice: v.costPrice,
+            costUnknown: v.costUnknown,
+            sellPrice: v.sellPrice,
+            currency: v.currency,
+            stock: v.stock,
+            lowStockThreshold: v.lowStockThreshold,
+          }))
+        : [blankVariantRow(0)],
+    )
+    setModalOpen(true)
+  }
+
+  function updateVariantRow(key: string, patch: Partial<VariantRow>) {
+    setVariantRows((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+  }
+
+  function addVariantRow() {
+    setVariantRows((rows) => [...rows, blankVariantRow(rows.length)])
+  }
+
+  function removeVariantRow(key: string) {
+    setVariantRows((rows) => (rows.length > 1 ? rows.filter((r) => r.key !== key) : rows))
+  }
+
+  function moveVariantRow(key: string, dir: -1 | 1) {
+    setVariantRows((rows) => {
+      const idx = rows.findIndex((r) => r.key === key)
+      const swapWith = idx + dir
+      if (idx < 0 || swapWith < 0 || swapWith >= rows.length) return rows
+      const next = [...rows]
+      ;[next[idx], next[swapWith]] = [next[swapWith], next[idx]]
+      return next
     })
-    setModalOpen(true)
   }
 
-  async function save() {
-    if (!form.name.trim()) return
+  async function saveProduct() {
+    if (!productForm.name.trim()) return
     const now = Date.now()
-    if (editing?.id) {
-      await db.items.update(editing.id, { ...form, updatedAt: now })
-    } else {
-      await db.items.add({ ...form, createdAt: now, updatedAt: now })
-    }
+    await db.transaction('rw', db.products, db.variants, async () => {
+      let productId: number
+      if (editingProduct?.id) {
+        productId = editingProduct.id
+        await db.products.update(productId, { ...productForm, updatedAt: now })
+      } else {
+        productId = (await db.products.add({ ...productForm, createdAt: now, updatedAt: now })) as number
+      }
+
+      const existingIds = new Set((variantsByProduct.get(productId) ?? []).map((v) => v.id))
+      const keptIds = new Set<number>()
+
+      for (const [idx, row] of variantRows.entries()) {
+        const payload = {
+          productId,
+          label: row.label.trim() || 'Standard',
+          sku: row.sku.trim() || undefined,
+          costPrice: row.costUnknown ? 0 : row.costPrice,
+          costUnknown: row.costUnknown,
+          sellPrice: row.sellPrice,
+          currency: row.currency,
+          stock: row.stock,
+          lowStockThreshold: row.lowStockThreshold,
+          order: idx,
+          updatedAt: now,
+        }
+        if (row.id) {
+          await db.variants.update(row.id, payload)
+          keptIds.add(row.id)
+        } else {
+          await db.variants.add({ ...payload, createdAt: now })
+        }
+      }
+
+      for (const id of existingIds) {
+        if (id && !keptIds.has(id)) await db.variants.delete(id)
+      }
+    })
     setModalOpen(false)
   }
 
-  async function remove(id: number) {
-    await db.items.delete(id)
+  async function removeProduct(product: Product) {
+    await db.transaction('rw', db.products, db.variants, async () => {
+      const vs = variantsByProduct.get(product.id!) ?? []
+      await db.variants.bulkDelete(vs.map((v) => v.id!))
+      await db.products.delete(product.id!)
+    })
+  }
+
+  function openUnitsEditor(categoryName: string) {
+    const existing = (categories ?? []).find((c) => c.name === categoryName)
+    setUnitsCategoryName(categoryName)
+    setUnitsDraft(existing?.allowedUnits ?? [])
+    setUnitsModalOpen(true)
+  }
+
+  async function saveUnitsEditor() {
+    const existing = (categories ?? []).find((c) => c.name === unitsCategoryName)
+    if (existing?.id) {
+      await db.categories.update(existing.id, { allowedUnits: unitsDraft })
+    } else {
+      await db.categories.add({ name: unitsCategoryName, allowedUnits: unitsDraft })
+    }
+    setUnitsModalOpen(false)
+  }
+
+  function toggleDraftUnit(u: string) {
+    setUnitsDraft((prev) => (prev.includes(u) ? prev.filter((x) => x !== u) : [...prev, u]))
   }
 
   return (
@@ -107,13 +242,13 @@ export default function Inventory() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Inventory Manager</h1>
-          <p className="text-sm text-[var(--text-secondary)]">{items?.length ?? 0} SKUs tracked so far</p>
+          <p className="text-sm text-[var(--text-secondary)]">{products?.length ?? 0} products tracked so far</p>
         </div>
         <div className="flex items-center gap-2">
           <Pill options={[{ label: 'List', value: 'list' }, { label: 'Visual', value: 'visual' }]} value={view} onChange={setView} />
           <Button onClick={openAdd}>
             <PlusIcon className="h-4 w-4" />
-            Add item
+            Add product
           </Button>
         </div>
       </div>
@@ -123,7 +258,7 @@ export default function Inventory() {
           <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
           <input
             className={inputClass + ' pl-9'}
-            placeholder="Search by name, variant, or SKU"
+            placeholder="Search by product, variant, or SKU"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -134,6 +269,14 @@ export default function Inventory() {
             <option key={c} value={c}>{c}</option>
           ))}
         </select>
+        <button
+          onClick={() => openUnitsEditor(categoryFilter !== 'All' ? categoryFilter : allCategories[0])}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-3 py-2 text-sm font-medium text-[var(--text-secondary)]"
+          title="Set which units are allowed per category"
+        >
+          <SettingsIcon className="h-4 w-4" />
+          Units per category
+        </button>
         {missingCostCount > 0 && (
           <button
             onClick={() => setMissingCostOnly((v) => !v)}
@@ -155,57 +298,98 @@ export default function Inventory() {
               <thead>
                 <tr className="text-xs text-[var(--text-muted)]">
                   <th className="pb-2 font-medium"></th>
-                  <th className="pb-2 font-medium">Item</th>
+                  <th className="pb-2 font-medium">Product</th>
                   <th className="pb-2 font-medium">Category</th>
-                  <th className="pb-2 font-medium">Variant</th>
+                  <th className="pb-2 font-medium">Variants</th>
                   <th className="pb-2 font-medium">Stock</th>
-                  <th className="pb-2 font-medium">Cost</th>
                   <th className="pb-2 font-medium">Sell</th>
                   <th className="pb-2 font-medium"></th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((item) => {
-                  const low = isLowStock(item.stock, item.lowStockThreshold)
+                {filtered.map((product) => {
+                  const variants = variantsByProduct.get(product.id!) ?? []
+                  const stockSum = variants.reduce((s, v) => s + v.stock, 0)
+                  const lowAny = variants.some((v) => isLowStock(v.stock, v.lowStockThreshold))
+                  const anyMissing = variants.some((v) => v.costUnknown)
+                  const sellValues = variants.map((v) => v.sellPrice)
+                  const currency = variants[0]?.currency ?? 'USD'
+                  const min = sellValues.length ? Math.min(...sellValues) : 0
+                  const max = sellValues.length ? Math.max(...sellValues) : 0
+                  const expanded = expandedId === product.id
                   return (
-                    <tr key={item.id} className="border-t border-[var(--gridline)]">
-                      <td className="py-2 pr-2">
-                        <ItemThumb image={item.image} size={32} />
-                      </td>
-                      <td className="py-2 pr-2 font-medium">{item.name}{item.sku && <span className="ml-1 text-xs text-[var(--text-muted)]">#{item.sku}</span>}</td>
-                      <td className="py-2 pr-2 text-[var(--text-secondary)]">{item.category}</td>
-                      <td className="py-2 pr-2 text-[var(--text-secondary)]">{item.variant || '—'}</td>
-                      <td className="py-2 pr-2">
-                        <span className="tabular">{item.stock}</span>
-                        {low && <Badge tone="critical">Low</Badge>}
-                      </td>
-                      <td className="py-2 pr-2">
-                        {item.costUnknown ? (
-                          <button onClick={() => openEdit(item)}>
-                            <Badge tone="warning">Cost missing</Badge>
+                    <Fragment key={product.id}>
+                      <tr key={product.id} className="border-t border-[var(--gridline)]">
+                        <td className="py-2 pr-2">
+                          <ItemThumb image={product.image} size={32} />
+                        </td>
+                        <td className="py-2 pr-2">
+                          <button
+                            onClick={() => setExpandedId(expanded ? null : product.id!)}
+                            className="text-left font-medium hover:text-[var(--series-1)]"
+                          >
+                            {product.name}
                           </button>
-                        ) : (
-                          <span className="tabular text-[var(--text-muted)]">{money(item.costPrice, item.currency)}</span>
-                        )}
-                      </td>
-                      <td className="tabular py-2 pr-2">{money(item.sellPrice, item.currency)}</td>
-                      <td className="py-2 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button onClick={() => openEdit(item)} className="text-[var(--text-muted)] hover:text-[var(--series-1)]" aria-label="Edit">
-                            <EditIcon className="h-4 w-4" />
+                          {anyMissing && <Badge tone="warning">Cost missing</Badge>}
+                        </td>
+                        <td className="py-2 pr-2 text-[var(--text-secondary)]">{product.category}</td>
+                        <td className="py-2 pr-2">
+                          <button onClick={() => setExpandedId(expanded ? null : product.id!)} className="text-[var(--series-1)] hover:underline">
+                            {variants.length} {variants.length === 1 ? 'variant' : 'variants'}
                           </button>
-                          <button onClick={() => item.id && remove(item.id)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Delete">
-                            <TrashIcon className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+                        <td className="py-2 pr-2">
+                          <span className="tabular">{stockSum}</span>
+                          {lowAny && <Badge tone="critical">Low</Badge>}
+                        </td>
+                        <td className="tabular py-2 pr-2">
+                          {min === max ? money(min, currency) : `${money(min, currency)}–${money(max, currency)}`}
+                        </td>
+                        <td className="py-2 text-right">
+                          <div className="flex justify-end gap-2">
+                            <button onClick={() => openEdit(product)} className="text-[var(--text-muted)] hover:text-[var(--series-1)]" aria-label="Edit">
+                              <EditIcon className="h-4 w-4" />
+                            </button>
+                            <button onClick={() => removeProduct(product)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Delete">
+                              <TrashIcon className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr key={`${product.id}-variants`} className="bg-[var(--page-plane)]">
+                          <td></td>
+                          <td colSpan={6} className="py-2 pr-2">
+                            <div className="flex flex-col gap-1.5">
+                              {variants.map((v) => (
+                                <div key={v.id} className="flex items-center justify-between gap-2 text-xs">
+                                  <span className="font-medium">
+                                    {v.label}
+                                    {v.sku && <span className="ml-1 text-[var(--text-muted)]">#{v.sku}</span>}
+                                  </span>
+                                  <span className="flex items-center gap-2">
+                                    {v.costUnknown ? (
+                                      <Badge tone="warning">Cost missing</Badge>
+                                    ) : (
+                                      <span className="tabular text-[var(--text-muted)]">{money(v.costPrice, v.currency)} cost</span>
+                                    )}
+                                    <span className="tabular">{money(v.sellPrice, v.currency)} sell</span>
+                                    <span className="tabular">{v.stock} in stock</span>
+                                    {isLowStock(v.stock, v.lowStockThreshold) && <Badge tone="critical">Low</Badge>}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   )
                 })}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-sm text-[var(--text-muted)]">
-                      No items yet. Add them as you go — you don't need it all at once.
+                    <td colSpan={7} className="py-8 text-center text-sm text-[var(--text-muted)]">
+                      No products yet. Add them as you go — you don't need it all at once.
                     </td>
                   </tr>
                 )}
@@ -215,23 +399,26 @@ export default function Inventory() {
         </Card>
       ) : (
         <div className="flex flex-col gap-4">
-          {byCategory.map(([category, catItems]) => {
-            const maxStock = Math.max(1, ...catItems.map((i) => i.stock))
+          {byCategory.map(([category, catProducts]) => {
+            const stockOf = (p: Product) => (variantsByProduct.get(p.id!) ?? []).reduce((s, v) => s + v.stock, 0)
+            const maxStock = Math.max(1, ...catProducts.map(stockOf))
             return (
               <Card key={category}>
                 <h2 className="mb-3 text-sm font-semibold">{category}</h2>
                 <div className="flex flex-wrap gap-2.5">
-                  {catItems.map((item) => {
-                    const low = isLowStock(item.stock, item.lowStockThreshold)
-                    const ok = item.stock > item.lowStockThreshold * 2
+                  {catProducts.map((product) => {
+                    const variants = variantsByProduct.get(product.id!) ?? []
+                    const stock = stockOf(product)
+                    const low = variants.some((v) => isLowStock(v.stock, v.lowStockThreshold))
+                    const ok = variants.length > 0 && variants.every((v) => v.stock > v.lowStockThreshold * 2)
                     const tone = low ? 'critical' : ok ? 'good' : 'warning'
-                    const scale = 0.85 + 0.65 * Math.min(1, item.stock / maxStock)
+                    const scale = 0.85 + 0.65 * Math.min(1, stock / maxStock)
                     const toneColor =
                       tone === 'critical' ? 'var(--status-critical)' : tone === 'good' ? 'var(--status-good)' : 'var(--status-warning)'
                     return (
                       <button
-                        key={item.id}
-                        onClick={() => openEdit(item)}
+                        key={product.id}
+                        onClick={() => openEdit(product)}
                         style={{
                           borderColor: toneColor,
                           transform: `scale(${scale})`,
@@ -239,10 +426,10 @@ export default function Inventory() {
                         }}
                         className="flex min-w-[110px] flex-col items-center gap-1.5 rounded-xl border-2 bg-[var(--page-plane)] px-3 py-2.5 text-center transition-transform"
                       >
-                        <ItemThumb image={item.image} size={36} />
-                        <span className="line-clamp-1 text-xs font-medium">{item.name}</span>
+                        <ItemThumb image={product.image} size={36} />
+                        <span className="line-clamp-1 text-xs font-medium">{product.name}</span>
                         <span className="tabular text-sm font-semibold" style={{ color: toneColor }}>
-                          {item.stock}
+                          {stock}
                         </span>
                       </button>
                     )
@@ -254,19 +441,19 @@ export default function Inventory() {
           {byCategory.length === 0 && (
             <Card>
               <p className="py-4 text-center text-sm text-[var(--text-muted)]">
-                No items yet. Add them as you go — you don't need it all at once.
+                No products yet. Add them as you go — you don't need it all at once.
               </p>
             </Card>
           )}
         </div>
       )}
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit item' : 'Add item'}>
-        <div className="flex flex-col gap-3">
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editingProduct ? 'Edit product' : 'Add product'}>
+        <div className="flex flex-col gap-4">
           <div className="flex items-center gap-3">
-            <ItemThumb image={form.image} size={56} />
+            <ItemThumb image={productForm.image} size={56} />
             <label className="cursor-pointer text-sm font-medium text-[var(--series-1)]">
-              {form.image ? 'Change photo' : 'Add photo'}
+              {productForm.image ? 'Change photo' : 'Add photo'}
               <input
                 type="file"
                 accept="image/*"
@@ -274,74 +461,196 @@ export default function Inventory() {
                 className="hidden"
                 onChange={(e) => {
                   const file = e.target.files?.[0]
-                  if (file) setForm({ ...form, image: file })
+                  if (file) setProductForm({ ...productForm, image: file })
                 }}
               />
             </label>
-            {form.image && (
-              <button onClick={() => setForm({ ...form, image: undefined })} className="text-sm text-[var(--text-muted)] hover:text-[var(--status-critical)]">
+            {productForm.image && (
+              <button onClick={() => setProductForm({ ...productForm, image: undefined })} className="text-sm text-[var(--text-muted)] hover:text-[var(--status-critical)]">
                 Remove
               </button>
             )}
           </div>
-          <Field label="Name">
-            <input className={inputClass} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+
+          <Field label="Product name">
+            <input className={inputClass} value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Category">
-              <input list="category-list" className={inputClass} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
-              <datalist id="category-list">
-                {allCategories.map((c) => <option key={c} value={c} />)}
-              </datalist>
-            </Field>
-            <Field label="Variant (size/color/pack)">
-              <input className={inputClass} value={form.variant} onChange={(e) => setForm({ ...form, variant: e.target.value })} />
-            </Field>
-          </div>
-          <Field label="SKU / barcode (optional)">
-            <input className={inputClass} value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Sell price">
-              <input type="number" min={0} step="0.01" className={inputClass} value={form.sellPrice} onFocus={selectOnFocus} onChange={(e) => setForm({ ...form, sellPrice: Number(e.target.value) || 0 })} />
-            </Field>
-            <Field label="Currency">
-              <select className={inputClass} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value as Currency })}>
-                <option value="USD">USD</option>
-                <option value="LRD">LRD</option>
-              </select>
-            </Field>
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--page-plane)] p-2.5">
-            <Switch
-              checked={form.costUnknown}
-              onChange={(v) => setForm({ ...form, costUnknown: v, costPrice: v ? 0 : form.costPrice })}
-              label="I don't know the cost yet"
+
+          <Field label="Category">
+            <input
+              list="category-list"
+              className={inputClass}
+              value={productForm.category}
+              onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
             />
-            {!form.costUnknown && (
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                placeholder="Cost price"
-                className={inputClass + ' w-32'}
-                value={form.costPrice}
-                onFocus={selectOnFocus}
-                onChange={(e) => setForm({ ...form, costPrice: Number(e.target.value) || 0 })}
-              />
-            )}
+            <datalist id="category-list">
+              {allCategories.map((c) => <option key={c} value={c} />)}
+            </datalist>
+          </Field>
+
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-[var(--text-secondary)]">
+                Variants <span className="text-[var(--text-muted)]">(cheapest first)</span>
+              </span>
+              <Button variant="secondary" onClick={addVariantRow}>
+                <PlusIcon className="h-3.5 w-3.5" />
+                Add variant
+              </Button>
+            </div>
+
+            {variantRows.map((row, idx) => (
+              <div key={row.key} className="flex flex-col gap-2 rounded-lg border border-[var(--border)] p-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    className={inputClass}
+                    placeholder='Variant label, e.g. "Double, Foam, Grade A"'
+                    value={row.label}
+                    onChange={(e) => updateVariantRow(row.key, { label: e.target.value })}
+                  />
+                  <button
+                    disabled={idx === 0}
+                    onClick={() => moveVariantRow(row.key, -1)}
+                    className="text-[var(--text-muted)] hover:text-[var(--series-1)] disabled:opacity-30"
+                    aria-label="Move up"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    disabled={idx === variantRows.length - 1}
+                    onClick={() => moveVariantRow(row.key, 1)}
+                    className="text-[var(--text-muted)] hover:text-[var(--series-1)] disabled:opacity-30"
+                    aria-label="Move down"
+                  >
+                    ▼
+                  </button>
+                  <button
+                    disabled={variantRows.length === 1}
+                    onClick={() => removeVariantRow(row.key)}
+                    className="text-[var(--text-muted)] hover:text-[var(--status-critical)] disabled:opacity-30"
+                    aria-label="Remove variant"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    className={inputClass}
+                    placeholder="SKU / barcode (optional)"
+                    value={row.sku}
+                    onChange={(e) => updateVariantRow(row.key, { sku: e.target.value })}
+                  />
+                  <select
+                    className={inputClass}
+                    value={row.currency}
+                    onChange={(e) => updateVariantRow(row.key, { currency: e.target.value as Currency })}
+                  >
+                    <option value="USD">USD</option>
+                    <option value="LRD">LRD</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    placeholder="Sell price"
+                    className={inputClass}
+                    value={row.sellPrice}
+                    onFocus={selectOnFocus}
+                    onChange={(e) => updateVariantRow(row.key, { sellPrice: Number(e.target.value) || 0 })}
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="Stock on hand"
+                    className={inputClass}
+                    value={row.stock}
+                    onFocus={selectOnFocus}
+                    onChange={(e) => updateVariantRow(row.key, { stock: Number(e.target.value) || 0 })}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="Low stock alert below"
+                    className={inputClass}
+                    value={row.lowStockThreshold}
+                    onFocus={selectOnFocus}
+                    onChange={(e) => updateVariantRow(row.key, { lowStockThreshold: Number(e.target.value) || 0 })}
+                  />
+                  <div className="flex items-center gap-2 rounded-lg bg-[var(--page-plane)] px-2.5">
+                    <Switch
+                      checked={row.costUnknown}
+                      onChange={(v) => updateVariantRow(row.key, { costUnknown: v, costPrice: v ? 0 : row.costPrice })}
+                      label="Cost unknown"
+                    />
+                  </div>
+                </div>
+                {!row.costUnknown && (
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    placeholder="Cost price"
+                    className={inputClass}
+                    value={row.costPrice}
+                    onFocus={selectOnFocus}
+                    onChange={(e) => updateVariantRow(row.key, { costPrice: Number(e.target.value) || 0 })}
+                  />
+                )}
+              </div>
+            ))}
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Stock on hand">
-              <input type="number" min={0} className={inputClass} value={form.stock} onFocus={selectOnFocus} onChange={(e) => setForm({ ...form, stock: Number(e.target.value) || 0 })} />
-            </Field>
-            <Field label="Low stock alert below">
-              <input type="number" min={0} className={inputClass} value={form.lowStockThreshold} onFocus={selectOnFocus} onChange={(e) => setForm({ ...form, lowStockThreshold: Number(e.target.value) || 0 })} />
-            </Field>
-          </div>
+
           <div className="mt-2 flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button onClick={save}>{editing ? 'Save changes' : 'Add item'}</Button>
+            <Button onClick={saveProduct}>{editingProduct ? 'Save changes' : 'Add product'}</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={unitsModalOpen} onClose={() => setUnitsModalOpen(false)} title="Units per category">
+        <div className="flex flex-col gap-3">
+          <Field label="Category">
+            <select
+              className={inputClass}
+              value={unitsCategoryName}
+              onChange={(e) => {
+                const name = e.target.value
+                const existing = (categories ?? []).find((c) => c.name === name)
+                setUnitsCategoryName(name)
+                setUnitsDraft(existing?.allowedUnits ?? [])
+              }}
+            >
+              {allCategories.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </Field>
+          <p className="text-xs text-[var(--text-muted)]">
+            Pick which units show up when recording a sale for this category. Leave none selected to allow all units.
+          </p>
+          <div className="grid grid-cols-3 gap-1.5">
+            {UNIT_TYPES.map((u) => (
+              <button
+                key={u}
+                type="button"
+                onClick={() => toggleDraftUnit(u)}
+                className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
+                  unitsDraft.includes(u)
+                    ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
+                    : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
+                }`}
+              >
+                {u}
+              </button>
+            ))}
+          </div>
+          <div className="mt-2 flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setUnitsModalOpen(false)}>Cancel</Button>
+            <Button onClick={saveUnitsEditor}>Save</Button>
           </div>
         </div>
       </Modal>

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
@@ -95,6 +95,64 @@ export function Modal({
   )
 }
 
+export function BottomSheet({
+  open,
+  onClose,
+  children,
+}: {
+  open: boolean
+  onClose: () => void
+  children: ReactNode
+}) {
+  const [dragY, setDragY] = useState(0)
+  const dragging = useRef(false)
+  const startY = useRef(0)
+
+  useEffect(() => {
+    if (open) setDragY(0)
+  }, [open])
+
+  if (!open) return null
+
+  function onPointerDown(e: PointerEvent) {
+    dragging.current = true
+    startY.current = e.clientY
+  }
+  function onPointerMove(e: PointerEvent) {
+    if (!dragging.current) return
+    const delta = e.clientY - startY.current
+    if (delta > 0) setDragY(delta)
+  }
+  function onPointerUp() {
+    dragging.current = false
+    if (dragY > 100) {
+      onClose()
+    } else {
+      setDragY(0)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 md:items-center" onClick={onClose}>
+      <div
+        style={{ transform: `translateY(${dragY}px)`, transition: dragY === 0 ? 'transform 0.2s ease-out' : 'none' }}
+        className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-[var(--surface-1)] md:max-w-lg md:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="sticky top-0 z-10 flex cursor-grab touch-none justify-center bg-[var(--surface-1)] py-2 active:cursor-grabbing"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+        >
+          <div className="h-1.5 w-10 rounded-full bg-[var(--gridline)]" />
+        </div>
+        <div className="px-5 pb-5">{children}</div>
+      </div>
+    </div>
+  )
+}
+
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-1 text-sm">
@@ -165,6 +223,29 @@ export function Switch({
       </span>
       {label && <span className="text-sm text-[var(--text-secondary)]">{label}</span>}
     </label>
+  )
+}
+
+export interface ToastMessage {
+  id: number
+  text: string
+  tone: 'success' | 'error'
+}
+
+export function ToastStack({ toasts }: { toasts: ToastMessage[] }) {
+  return (
+    <div className="fixed inset-x-0 top-4 z-[60] flex flex-col items-center gap-2 px-4">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`pointer-events-auto max-w-sm rounded-lg px-4 py-2.5 text-sm font-medium shadow-lg ${
+            t.tone === 'success' ? 'bg-[var(--status-good)] text-white' : 'bg-[var(--status-critical)] text-white'
+          }`}
+        >
+          {t.text}
+        </div>
+      ))}
+    </div>
   )
 }
 

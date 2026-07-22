@@ -34,12 +34,13 @@ export default function Settings() {
   }
 
   async function exportBackup() {
-    const [items, sales, cats] = await Promise.all([
-      db.items.toArray(),
+    const [products, variants, sales, cats] = await Promise.all([
+      db.products.toArray(),
+      db.variants.toArray(),
       db.sales.toArray(),
       db.categories.toArray(),
     ])
-    const payload = { exportedAt: new Date().toISOString(), items, sales, categories: cats }
+    const payload = { exportedAt: new Date().toISOString(), products, variants, sales, categories: cats }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -54,23 +55,38 @@ export default function Settings() {
     try {
       const text = await file.text()
       const data = JSON.parse(text)
-      await db.transaction('rw', db.items, db.sales, db.categories, async () => {
-        if (Array.isArray(data.items)) {
-          for (const item of data.items) {
-            const { id, ...rest } = item
-            await db.items.add(rest)
+      await db.transaction('rw', db.products, db.variants, db.sales, db.categories, async () => {
+        const productIdMap = new Map<number, number>()
+        if (Array.isArray(data.products)) {
+          for (const product of data.products) {
+            const { id, ...rest } = product
+            const newId = (await db.products.add(rest)) as number
+            if (id != null) productIdMap.set(id, newId)
+          }
+        }
+        const variantIdMap = new Map<number, number>()
+        if (Array.isArray(data.variants)) {
+          for (const variant of data.variants) {
+            const { id, productId, ...rest } = variant
+            const newProductId = productIdMap.get(productId) ?? productId
+            const newId = (await db.variants.add({ ...rest, productId: newProductId })) as number
+            if (id != null) variantIdMap.set(id, newId)
           }
         }
         if (Array.isArray(data.sales)) {
           for (const sale of data.sales) {
-            const { id, ...rest } = sale
-            await db.sales.add(rest)
+            const { id, productId, variantId, ...rest } = sale
+            await db.sales.add({
+              ...rest,
+              productId: productId != null ? productIdMap.get(productId) ?? productId : undefined,
+              variantId: variantId != null ? variantIdMap.get(variantId) ?? variantId : undefined,
+            })
           }
         }
         if (Array.isArray(data.categories)) {
           for (const cat of data.categories) {
             const exists = await db.categories.where('name').equalsIgnoreCase(cat.name).first()
-            if (!exists) await db.categories.add({ name: cat.name })
+            if (!exists) await db.categories.add({ name: cat.name, allowedUnits: cat.allowedUnits })
           }
         }
       })
