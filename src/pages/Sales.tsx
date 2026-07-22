@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, profitOf, reserveNextCustomerNumber, peekNextCustomerNumber, NEXT_CUSTOMER_NUMBER_KEY, type Currency, type Item, type Sale } from '../db'
 import { Card, Button, Field, inputClass, Badge, Pill, Switch } from '../components/ui'
@@ -6,6 +6,8 @@ import { ItemThumb } from '../components/ItemThumb'
 import { PlusIcon, SearchIcon, TrashIcon } from '../components/icons'
 import { money, startOfDay, endOfDay } from '../lib/format'
 import { format } from 'date-fns'
+
+const UNIT_TYPES = ['Piece', 'Carton', 'Sheet', 'Bundle', 'Yard', 'Gallon', 'Bucket', 'Pack', 'Other']
 
 export default function Sales() {
   const [dateStr, setDateStr] = useState(() => format(Date.now(), 'yyyy-MM-dd'))
@@ -126,7 +128,10 @@ export default function Sales() {
                       {s.tbs && s.pickedUp && <Badge tone="good">Picked up</Badge>}
                     </div>
                   </td>
-                  <td className="tabular py-2 pr-2">{s.qty}</td>
+                  <td className="tabular py-2 pr-2">
+                    {s.qty}
+                    {s.unitType && <span className="text-[var(--text-muted)]"> {s.unitType}</span>}
+                  </td>
                   <td className="tabular py-2 pr-2">{money(s.soldFor, s.currency)}</td>
                   <td className="tabular py-2 pr-2 text-[var(--text-muted)]">{money(s.costAtSale, s.currency)}</td>
                   <td className="tabular py-2 pr-2 text-[var(--status-good)]">{money(profitOf(s), s.currency)}</td>
@@ -172,6 +177,8 @@ function SaleForm() {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Item | null>(null)
   const [qty, setQty] = useState(1)
+  const [unitType, setUnitType] = useState('Piece')
+  const [customUnit, setCustomUnit] = useState('')
   const [soldFor, setSoldFor] = useState<number>(0)
   const [currency, setCurrency] = useState<Currency>('USD')
   const [manualName, setManualName] = useState('')
@@ -179,6 +186,12 @@ function SaleForm() {
   const [costUnknown, setCostUnknown] = useState(true)
   const [sameAsLast, setSameAsLast] = useState(false)
   const [tbs, setTbs] = useState(false)
+
+  const qtyRef = useRef<HTMLInputElement>(null)
+  const unitSelectRef = useRef<HTMLSelectElement>(null)
+  const customUnitRef = useRef<HTMLInputElement>(null)
+  const itemInputRef = useRef<HTMLInputElement>(null)
+  const soldForRef = useRef<HTMLInputElement>(null)
 
   const nextCounterRow = useLiveQuery(() => db.settings.get(NEXT_CUSTOMER_NUMBER_KEY), [])
   const nextNumber = peekNextCustomerNumber(nextCounterRow)
@@ -201,6 +214,23 @@ function SaleForm() {
   function changeQty(next: number) {
     setQty(next)
     if (selected) setSoldFor(selected.sellPrice * next)
+  }
+
+  function advanceFromUnit() {
+    if (unitType === 'Other') {
+      customUnitRef.current?.focus()
+    } else {
+      itemInputRef.current?.focus()
+    }
+  }
+
+  function onEnterAdvance(next: () => void) {
+    return (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        next()
+      }
+    }
   }
 
   const costTotal = selected ? selected.costPrice * qty : costUnknown ? 0 : manualCost
@@ -250,6 +280,7 @@ function SaleForm() {
         category: itemCategory,
         variant: itemVariant,
         qty,
+        unitType: unitType === 'Other' ? customUnit.trim() || undefined : unitType,
         soldFor,
         costAtSale: costTotal,
         currency,
@@ -273,11 +304,14 @@ function SaleForm() {
     setSelected(null)
     setQuery('')
     setQty(1)
+    setUnitType('Piece')
+    setCustomUnit('')
     setSoldFor(0)
     setManualName('')
     setManualCost(0)
     setCostUnknown(true)
     setTbs(false)
+    qtyRef.current?.focus()
   }
 
   return (
@@ -301,12 +335,61 @@ function SaleForm() {
       </div>
 
       <div className="flex flex-col gap-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Quantity">
+            <input
+              ref={qtyRef}
+              type="number"
+              inputMode="numeric"
+              min={1}
+              className={inputClass}
+              value={qty}
+              onChange={(e) => changeQty(Number(e.target.value) || 1)}
+              onKeyDown={onEnterAdvance(() => unitSelectRef.current?.focus())}
+              enterKeyHint="next"
+            />
+          </Field>
+
+          <Field label="Unit">
+            <select
+              ref={unitSelectRef}
+              className={inputClass}
+              value={unitType}
+              onChange={(e) => {
+                setUnitType(e.target.value)
+                if (e.target.value === 'Other') {
+                  setTimeout(() => customUnitRef.current?.focus(), 0)
+                } else {
+                  setTimeout(() => itemInputRef.current?.focus(), 0)
+                }
+              }}
+              onKeyDown={onEnterAdvance(advanceFromUnit)}
+            >
+              {UNIT_TYPES.map((u) => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </select>
+            {unitType === 'Other' && (
+              <input
+                ref={customUnitRef}
+                className={inputClass + ' mt-1.5'}
+                placeholder="Custom unit"
+                value={customUnit}
+                onChange={(e) => setCustomUnit(e.target.value)}
+                onKeyDown={onEnterAdvance(() => itemInputRef.current?.focus())}
+                enterKeyHint="next"
+              />
+            )}
+          </Field>
+        </div>
+
         <Field label="Item">
           <div className="relative flex items-center gap-2">
             {selected && <ItemThumb image={selected.image} size={36} />}
             <div className="relative flex-1">
               <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
               <input
+                ref={itemInputRef}
                 className={inputClass + ' pl-9'}
                 placeholder="Search inventory or type a new item name"
                 value={query}
@@ -315,6 +398,8 @@ function SaleForm() {
                   setSelected(null)
                   setManualName(e.target.value)
                 }}
+                onKeyDown={onEnterAdvance(() => soldForRef.current?.focus())}
+                enterKeyHint="next"
               />
             {query && !selected && filtered.length > 0 && (
               <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
@@ -338,28 +423,20 @@ function SaleForm() {
           )}
         </Field>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Quantity">
-            <input
-              type="number"
-              min={1}
-              className={inputClass}
-              value={qty}
-              onChange={(e) => changeQty(Number(e.target.value) || 1)}
-            />
-          </Field>
-
-          <Field label="Sold for (total)">
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              className={inputClass}
-              value={soldFor}
-              onChange={(e) => setSoldFor(Number(e.target.value) || 0)}
-            />
-          </Field>
-        </div>
+        <Field label="Sold for (total)">
+          <input
+            ref={soldForRef}
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="0.01"
+            className={inputClass}
+            value={soldFor}
+            onChange={(e) => setSoldFor(Number(e.target.value) || 0)}
+            onKeyDown={onEnterAdvance(() => submit())}
+            enterKeyHint="done"
+          />
+        </Field>
 
         {!selected && (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--page-plane)] p-2.5">

@@ -26,6 +26,7 @@ export interface Sale {
   category?: string
   variant?: string
   qty: number
+  unitType?: string // Carton, Sheet, Bundle, Yard, Gallon, Bucket, Piece, Pack, or a custom unit
   soldFor: number // total sale price for the qty
   costAtSale: number // total cost for the qty
   currency: Currency
