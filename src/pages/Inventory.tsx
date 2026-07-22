@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, DEFAULT_CATEGORIES, UNIT_TYPES, type Currency, type Product, type Variant, type TransferDirection } from '../db'
 import { Card, Button, Modal, Field, inputClass, Badge, Switch, Pill } from '../components/ui'
@@ -6,6 +6,29 @@ import { PlusIcon, SearchIcon, EditIcon, TrashIcon, SettingsIcon } from '../comp
 import { ItemThumb } from '../components/ItemThumb'
 import { money, isLowStock, selectOnFocus } from '../lib/format'
 import { format } from 'date-fns'
+
+// Missing cost = never entered (costUnknown) OR left at a literal zero,
+// which in practice almost always means the same thing: nobody's typed a
+// real cost in yet. Both trigger the red "Cost Missing" alert.
+function hasMissingCost(v: Variant): boolean {
+  return v.costUnknown || !v.costPrice
+}
+
+function CostTag({ variant }: { variant: Variant }) {
+  if (hasMissingCost(variant)) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--status-critical)] px-2 py-0.5 text-xs font-bold text-white">
+        <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white text-[10px] font-bold text-[var(--status-critical)]">!</span>
+        Cost Missing
+      </span>
+    )
+  }
+  return (
+    <span className="tabular shrink-0 text-sm font-semibold text-[var(--text-primary)]">
+      {money(variant.costPrice, variant.currency)}
+    </span>
+  )
+}
 
 interface VariantRow {
   key: string
@@ -92,14 +115,14 @@ export default function Inventory() {
   }, [products, categories])
 
   const missingCostCount = useMemo(
-    () => (allVariants ?? []).filter((v) => v.costUnknown).length,
+    () => (allVariants ?? []).filter(hasMissingCost).length,
     [allVariants],
   )
 
   const filtered = useMemo(() => {
     let list = products ?? []
     if (categoryFilter !== 'All') list = list.filter((p) => p.category === categoryFilter)
-    if (missingCostOnly) list = list.filter((p) => (variantsByProduct.get(p.id!) ?? []).some((v) => v.costUnknown))
+    if (missingCostOnly) list = list.filter((p) => (variantsByProduct.get(p.id!) ?? []).some(hasMissingCost))
     if (query.trim()) {
       const q = query.toLowerCase()
       list = list.filter((p) => {
@@ -110,8 +133,8 @@ export default function Inventory() {
       })
     }
     return [...list].sort((a, b) => {
-      const aMissing = (variantsByProduct.get(a.id!) ?? []).some((v) => v.costUnknown)
-      const bMissing = (variantsByProduct.get(b.id!) ?? []).some((v) => v.costUnknown)
+      const aMissing = (variantsByProduct.get(a.id!) ?? []).some(hasMissingCost)
+      const bMissing = (variantsByProduct.get(b.id!) ?? []).some(hasMissingCost)
       return Number(bMissing) - Number(aMissing) || a.name.localeCompare(b.name)
     })
   }, [products, query, categoryFilter, missingCostOnly, variantsByProduct])
@@ -447,114 +470,103 @@ export default function Inventory() {
       </Card>
 
       {view === 'list' ? (
-        <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-xs text-[var(--text-muted)]">
-                  <th className="pb-2 font-medium"></th>
-                  <th className="pb-2 font-medium">Product</th>
-                  <th className="pb-2 font-medium">Category</th>
-                  <th className="pb-2 font-medium">Variants</th>
-                  <th className="pb-2 font-medium">My Shop</th>
-                  <th className="pb-2 font-medium">Vishal's</th>
-                  <th className="pb-2 font-medium">Sell</th>
-                  <th className="pb-2 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((product) => {
-                  const variants = variantsByProduct.get(product.id!) ?? []
-                  const stockMySum = variants.reduce((s, v) => s + v.stockMyShop, 0)
-                  const stockVishalSum = variants.reduce((s, v) => s + v.stockVishalShop, 0)
-                  const lowAny = variants.some((v) => isLowStock(v.stockMyShop, v.lowStockThreshold))
-                  const anyMissing = variants.some((v) => v.costUnknown)
-                  const sellValues = variants.map((v) => v.sellPrice)
-                  const currency = variants[0]?.currency ?? 'USD'
-                  const min = sellValues.length ? Math.min(...sellValues) : 0
-                  const max = sellValues.length ? Math.max(...sellValues) : 0
-                  const expanded = expandedId === product.id
-                  return (
-                    <Fragment key={product.id}>
-                      <tr key={product.id} className="border-t border-[var(--gridline)]">
-                        <td className="py-2 pr-2">
-                          <ItemThumb image={product.image} size={32} />
-                        </td>
-                        <td className="py-2 pr-2">
-                          <button
-                            onClick={() => setExpandedId(expanded ? null : product.id!)}
-                            className="text-left font-medium hover:text-[var(--series-1)]"
-                          >
-                            {product.name}
-                          </button>
-                          {anyMissing && <Badge tone="warning">Cost missing</Badge>}
-                        </td>
-                        <td className="py-2 pr-2 text-[var(--text-secondary)]">{product.category}</td>
-                        <td className="py-2 pr-2">
-                          <button onClick={() => setExpandedId(expanded ? null : product.id!)} className="text-[var(--series-1)] hover:underline">
-                            {variants.length} {variants.length === 1 ? 'variant' : 'variants'}
-                          </button>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <span className="tabular">{stockMySum}</span>
-                          {lowAny && <Badge tone="critical">Low</Badge>}
-                        </td>
-                        <td className="tabular py-2 pr-2 text-[var(--text-secondary)]">{stockVishalSum}</td>
-                        <td className="tabular py-2 pr-2">
-                          {min === max ? money(min, currency) : `${money(min, currency)}–${money(max, currency)}`}
-                        </td>
-                        <td className="py-2 text-right">
-                          <div className="flex justify-end gap-2">
-                            <button onClick={() => openEdit(product)} className="text-[var(--text-muted)] hover:text-[var(--series-1)]" aria-label="Edit">
-                              <EditIcon className="h-4 w-4" />
-                            </button>
-                            <button onClick={() => removeProduct(product)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Delete">
-                              <TrashIcon className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                      {expanded && (
-                        <tr key={`${product.id}-variants`} className="bg-[var(--page-plane)]">
-                          <td></td>
-                          <td colSpan={7} className="py-2 pr-2">
-                            <div className="flex flex-col gap-1.5">
-                              {variants.map((v) => (
-                                <div key={v.id} className="flex items-center justify-between gap-2 text-xs">
-                                  <span className="font-medium">
-                                    {v.label}
-                                    {v.sku && <span className="ml-1 text-[var(--text-muted)]">#{v.sku}</span>}
-                                  </span>
-                                  <span className="flex items-center gap-2">
-                                    {v.costUnknown ? (
-                                      <Badge tone="warning">Cost missing</Badge>
-                                    ) : (
-                                      <span className="tabular text-[var(--text-muted)]">{money(v.costPrice, v.currency)} cost</span>
-                                    )}
-                                    <span className="tabular">{money(v.sellPrice, v.currency)} sell</span>
-                                    <span className="tabular">{v.stockMyShop} mine · {v.stockVishalShop} Vishal's</span>
-                                    {isLowStock(v.stockMyShop, v.lowStockThreshold) && <Badge tone="critical">Low</Badge>}
-                                  </span>
-                                </div>
-                              ))}
+        <div className="flex flex-col gap-3">
+          {filtered.map((product) => {
+            const variants = variantsByProduct.get(product.id!) ?? []
+            const stockMySum = variants.reduce((s, v) => s + v.stockMyShop, 0)
+            const stockVishalSum = variants.reduce((s, v) => s + v.stockVishalShop, 0)
+            const lowAny = variants.some((v) => isLowStock(v.stockMyShop, v.lowStockThreshold))
+            const anyMissingCost = variants.some(hasMissingCost)
+            const expanded = expandedId === product.id
+            const single = variants.length <= 1
+            const onlyVariant = variants[0]
+
+            return (
+              <Card key={product.id}>
+                <div className="flex items-start gap-3">
+                  <ItemThumb image={product.image} size={40} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="truncate text-base font-semibold">{product.name}</h3>
+                      <div className="flex shrink-0 gap-2">
+                        <button onClick={() => openEdit(product)} className="text-[var(--text-muted)] hover:text-[var(--series-1)]" aria-label="Edit">
+                          <EditIcon className="h-4 w-4" />
+                        </button>
+                        <button onClick={() => removeProduct(product)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Delete">
+                          <TrashIcon className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="text-xs text-[var(--text-muted)]">{product.category}</div>
+
+                    {single ? (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {onlyVariant && onlyVariant.label !== 'Standard' && (
+                          <span className="text-sm text-[var(--text-secondary)]">{onlyVariant.label}</span>
+                        )}
+                        {onlyVariant ? (
+                          <CostTag variant={onlyVariant} />
+                        ) : (
+                          <span className="text-xs text-[var(--text-muted)]">No variant yet</span>
+                        )}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setExpandedId(expanded ? null : product.id!)}
+                        className="mt-2 flex items-center gap-1.5 text-sm font-medium text-[var(--series-1)]"
+                      >
+                        {variants.length} variants
+                        {anyMissingCost && (
+                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-[var(--status-critical)] text-[10px] font-bold text-white">
+                            !
+                          </span>
+                        )}
+                        <span className="text-xs">{expanded ? '▾' : '▸'}</span>
+                      </button>
+                    )}
+
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-muted)]">
+                      <span className="tabular">
+                        My Shop: <span className="font-medium text-[var(--text-secondary)]">{stockMySum}</span>
+                      </span>
+                      <span className="tabular">
+                        Vishal's: <span className="font-medium text-[var(--text-secondary)]">{stockVishalSum}</span>
+                      </span>
+                      {lowAny && <Badge tone="critical">Low stock</Badge>}
+                    </div>
+
+                    {!single && expanded && (
+                      <div className="mt-3 flex flex-col gap-2.5 border-t border-[var(--gridline)] pt-3">
+                        {variants.map((v) => (
+                          <div key={v.id} className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium">
+                                {v.label}
+                                {v.sku && <span className="ml-1 text-xs text-[var(--text-muted)]">#{v.sku}</span>}
+                              </div>
+                              <div className="tabular text-xs text-[var(--text-muted)]">
+                                {v.stockMyShop} mine · {v.stockVishalShop} Vishal's
+                                {isLowStock(v.stockMyShop, v.lowStockThreshold) && ' · low'}
+                              </div>
                             </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  )
-                })}
-                {filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="py-8 text-center text-sm text-[var(--text-muted)]">
-                      No products yet. Add them as you go — you don't need it all at once.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+                            <CostTag variant={v} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            )
+          })}
+          {filtered.length === 0 && (
+            <Card>
+              <p className="py-8 text-center text-sm text-[var(--text-muted)]">
+                No products yet. Add them as you go — you don't need it all at once.
+              </p>
+            </Card>
+          )}
+        </div>
       ) : (
         <div className="flex flex-col gap-4">
           {byCategory.map(([category, catProducts]) => {
