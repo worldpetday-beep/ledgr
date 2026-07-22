@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db } from '../db'
-import { Card, Button, inputClass } from '../components/ui'
+import { db, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE } from '../db'
+import { Card, Button, inputClass, Field } from '../components/ui'
 import { PlusIcon, TrashIcon } from '../components/icons'
 
 export default function Settings() {
@@ -9,6 +9,16 @@ export default function Settings() {
   const [newCategory, setNewCategory] = useState('')
   const [status, setStatus] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
+  const [rateInput, setRateInput] = useState<string | null>(null)
+  const rateValue = rateInput ?? rateRow?.value ?? String(DEFAULT_EXCHANGE_RATE)
+
+  async function saveRate(value: string) {
+    setRateInput(value)
+    const num = Number(value)
+    if (num > 0) await db.settings.put({ key: EXCHANGE_RATE_KEY, value: String(num) })
+  }
 
   async function addCategory() {
     const name = newCategory.trim()
@@ -75,6 +85,23 @@ export default function Settings() {
         <h1 className="text-xl font-semibold">Settings</h1>
         <p className="text-sm text-[var(--text-secondary)]">Categories and backups</p>
       </div>
+
+      <Card>
+        <h2 className="mb-2 text-sm font-semibold">Exchange rate</h2>
+        <p className="mb-3 text-sm text-[var(--text-secondary)]">
+          LRD per 1 USD, for reference and the blended total shown in Analytics. Update it whenever the rate changes — it's not fetched automatically since this app is offline.
+        </p>
+        <Field label="Rate (L$ per $1)">
+          <input
+            type="number"
+            min={1}
+            step="1"
+            className={inputClass + ' w-40'}
+            value={rateValue}
+            onChange={(e) => saveRate(e.target.value)}
+          />
+        </Field>
+      </Card>
 
       <Card>
         <h2 className="mb-3 text-sm font-semibold">Categories</h2>

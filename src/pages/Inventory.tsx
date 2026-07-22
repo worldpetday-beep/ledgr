@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, DEFAULT_CATEGORIES, type Currency, type Item } from '../db'
-import { Card, Button, Modal, Field, inputClass, Badge } from '../components/ui'
+import { Card, Button, Modal, Field, inputClass, Badge, Switch } from '../components/ui'
 import { PlusIcon, SearchIcon, EditIcon, TrashIcon } from '../components/icons'
 import { money, isLowStock } from '../lib/format'
 
@@ -11,6 +11,7 @@ const emptyForm = {
   variant: '',
   sku: '',
   costPrice: 0,
+  costUnknown: false,
   sellPrice: 0,
   currency: 'USD' as Currency,
   stock: 0,
@@ -22,9 +23,12 @@ export default function Inventory() {
   const categories = useLiveQuery(() => db.categories.toArray(), [])
   const [query, setQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('All')
+  const [missingCostOnly, setMissingCostOnly] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Item | null>(null)
   const [form, setForm] = useState(emptyForm)
+
+  const missingCostCount = useMemo(() => (items ?? []).filter((i) => i.costUnknown).length, [items])
 
   const allCategories = useMemo(() => {
     const fromItems = new Set((items ?? []).map((i) => i.category))
@@ -35,14 +39,16 @@ export default function Inventory() {
   const filtered = useMemo(() => {
     let list = items ?? []
     if (categoryFilter !== 'All') list = list.filter((i) => i.category === categoryFilter)
+    if (missingCostOnly) list = list.filter((i) => i.costUnknown)
     if (query.trim()) {
       const q = query.toLowerCase()
       list = list.filter(
         (i) => i.name.toLowerCase().includes(q) || i.sku?.toLowerCase().includes(q) || i.variant.toLowerCase().includes(q),
       )
     }
-    return list
-  }, [items, query, categoryFilter])
+    // Items missing a cost float to the top so they're easy to fill in.
+    return [...list].sort((a, b) => Number(b.costUnknown) - Number(a.costUnknown) || a.name.localeCompare(b.name))
+  }, [items, query, categoryFilter, missingCostOnly])
 
   function openAdd() {
     setEditing(null)
@@ -58,6 +64,7 @@ export default function Inventory() {
       variant: item.variant,
       sku: item.sku ?? '',
       costPrice: item.costPrice,
+      costUnknown: item.costUnknown,
       sellPrice: item.sellPrice,
       currency: item.currency,
       stock: item.stock,
@@ -110,6 +117,18 @@ export default function Inventory() {
             <option key={c} value={c}>{c}</option>
           ))}
         </select>
+        {missingCostCount > 0 && (
+          <button
+            onClick={() => setMissingCostOnly((v) => !v)}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+              missingCostOnly
+                ? 'border-[var(--series-1)] bg-[var(--series-1)]/10 text-[var(--series-1)]'
+                : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
+            }`}
+          >
+            Missing cost <Badge tone="warning">{missingCostCount}</Badge>
+          </button>
+        )}
       </div>
 
       <Card>
@@ -138,7 +157,15 @@ export default function Inventory() {
                       <span className="tabular">{item.stock}</span>
                       {low && <Badge tone="critical">Low</Badge>}
                     </td>
-                    <td className="tabular py-2 pr-2 text-[var(--text-muted)]">{money(item.costPrice, item.currency)}</td>
+                    <td className="py-2 pr-2">
+                      {item.costUnknown ? (
+                        <button onClick={() => openEdit(item)}>
+                          <Badge tone="warning">Cost missing</Badge>
+                        </button>
+                      ) : (
+                        <span className="tabular text-[var(--text-muted)]">{money(item.costPrice, item.currency)}</span>
+                      )}
+                    </td>
                     <td className="tabular py-2 pr-2">{money(item.sellPrice, item.currency)}</td>
                     <td className="py-2 text-right">
                       <div className="flex justify-end gap-2">
@@ -184,10 +211,7 @@ export default function Inventory() {
           <Field label="SKU / barcode (optional)">
             <input className={inputClass} value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} />
           </Field>
-          <div className="grid grid-cols-3 gap-3">
-            <Field label="Cost price">
-              <input type="number" min={0} step="0.01" className={inputClass} value={form.costPrice} onChange={(e) => setForm({ ...form, costPrice: Number(e.target.value) || 0 })} />
-            </Field>
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Sell price">
               <input type="number" min={0} step="0.01" className={inputClass} value={form.sellPrice} onChange={(e) => setForm({ ...form, sellPrice: Number(e.target.value) || 0 })} />
             </Field>
@@ -197,6 +221,24 @@ export default function Inventory() {
                 <option value="LRD">LRD</option>
               </select>
             </Field>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--page-plane)] p-2.5">
+            <Switch
+              checked={form.costUnknown}
+              onChange={(v) => setForm({ ...form, costUnknown: v, costPrice: v ? 0 : form.costPrice })}
+              label="I don't know the cost yet"
+            />
+            {!form.costUnknown && (
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                placeholder="Cost price"
+                className={inputClass + ' w-32'}
+                value={form.costPrice}
+                onChange={(e) => setForm({ ...form, costPrice: Number(e.target.value) || 0 })}
+              />
+            )}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Stock on hand">

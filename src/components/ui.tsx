@@ -107,6 +107,67 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--series-1)]'
 
+export function Pill<T extends string>({
+  options,
+  value,
+  onChange,
+  className = '',
+}: {
+  options: { label: string; value: T }[]
+  value: T
+  onChange: (v: T) => void
+  className?: string
+}) {
+  return (
+    <div className={`inline-flex rounded-full border border-[var(--border)] bg-[var(--page-plane)] p-1 ${className}`}>
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(opt.value)}
+          className={`rounded-full px-4 py-1.5 text-sm font-semibold transition-colors ${
+            value === opt.value ? 'bg-[var(--series-1)] text-white' : 'text-[var(--text-secondary)]'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export function Switch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  onChange: (v: boolean) => void
+  label?: ReactNode
+}) {
+  return (
+    <label className="flex cursor-pointer select-none items-center gap-2">
+      <span
+        className="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors"
+        style={{ background: checked ? 'var(--series-1)' : 'var(--gridline)' }}
+      >
+        <input
+          type="checkbox"
+          className="absolute inset-0 opacity-0"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span
+          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+            checked ? 'translate-x-5' : 'translate-x-0.5'
+          }`}
+        />
+      </span>
+      {label && <span className="text-sm text-[var(--text-secondary)]">{label}</span>}
+    </label>
+  )
+}
+
 export function Badge({ children, tone = 'muted' }: { children: ReactNode; tone?: 'muted' | 'good' | 'warning' | 'critical' }) {
   const styles: Record<string, string> = {
     muted: 'bg-[var(--page-plane)] text-[var(--text-secondary)]',
