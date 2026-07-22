@@ -26,9 +26,11 @@ export function RecordSaleSheet({
   onSaved: (summary: string) => void
   onError: (message: string) => void
 }) {
-  const products = useLiveQuery(() => db.products.orderBy('name').toArray(), [])
-  const allVariants = useLiveQuery(() => db.variants.toArray(), [])
-  const categories = useLiveQuery(() => db.categories.toArray(), [])
+  // Gated on `open` so this globally-mounted sheet doesn't keep subscribing
+  // to these tables (and re-running on every write) while it's hidden.
+  const products = useLiveQuery(() => (open ? db.products.orderBy('name').toArray() : []), [open])
+  const allVariants = useLiveQuery(() => (open ? db.variants.toArray() : []), [open])
+  const categories = useLiveQuery(() => (open ? db.categories.toArray() : []), [open])
 
   const [query, setQuery] = useState('')
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
@@ -38,7 +40,6 @@ export function RecordSaleSheet({
   const [customUnit, setCustomUnit] = useState('')
   const [soldFor, setSoldFor] = useState<number>(0)
   const [currency, setCurrency] = useState<Currency>('USD')
-  const [manualName, setManualName] = useState('')
   const [manualVariant, setManualVariant] = useState('')
   const [manualCost, setManualCost] = useState<number>(0)
   const [costUnknown, setCostUnknown] = useState(true)
@@ -52,13 +53,14 @@ export function RecordSaleSheet({
   const customUnitRef = useRef<HTMLInputElement>(null)
   const itemInputRef = useRef<HTMLInputElement>(null)
   const manualVariantRef = useRef<HTMLInputElement>(null)
+  const manualCostRef = useRef<HTMLInputElement>(null)
   const soldForRef = useRef<HTMLInputElement>(null)
   const unitChipRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const variantChipRefs = useRef<Record<number, HTMLButtonElement | null>>({})
 
-  const nextCounterRow = useLiveQuery(() => db.settings.get(NEXT_CUSTOMER_NUMBER_KEY), [])
+  const nextCounterRow = useLiveQuery(() => (open ? db.settings.get(NEXT_CUSTOMER_NUMBER_KEY) : undefined), [open])
   const nextNumber = peekNextCustomerNumber(nextCounterRow)
-  const lastSale = useLiveQuery(() => db.sales.orderBy('timestamp').last(), [])
+  const lastSale = useLiveQuery(() => (open ? db.sales.orderBy('timestamp').last() : undefined), [open])
   const previewNumber = sameAsLast && lastSale ? lastSale.customerNumber : nextNumber
 
   const variantsByProduct = useMemo(() => {
@@ -115,7 +117,6 @@ export function RecordSaleSheet({
       setUnitType('Piece')
       setCustomUnit('')
       setSoldFor(0)
-      setManualName('')
       setManualVariant('')
       setManualCost(0)
       setCostUnknown(true)
@@ -192,10 +193,22 @@ export function RecordSaleSheet({
     }
   }
 
-  const costTotal = selectedVariant ? selectedVariant.costPrice * qty : costUnknown ? 0 : manualCost
-
   async function submit() {
     setSaveError(null)
+
+    // Read the live DOM values rather than trusting the closed-over React
+    // state: if "Record sale" is tapped in the same instant as the last
+    // keystroke, the click can fire before that keystroke's state update
+    // has committed, which would otherwise silently save a stale (often
+    // zero) value. Reading straight from the inputs makes this immune to
+    // that race regardless of how fast the user types and taps.
+    const qty = qtyRef.current ? Number(qtyRef.current.value) || 0 : 0
+    const soldFor = soldForRef.current ? Number(soldForRef.current.value) || 0 : 0
+    const manualName = itemInputRef.current?.value ?? ''
+    const manualVariant = manualVariantRef.current?.value ?? ''
+    const manualCost = manualCostRef.current ? Number(manualCostRef.current.value) || 0 : 0
+    const costTotal = selectedVariant ? selectedVariant.costPrice * qty : costUnknown ? 0 : manualCost
+
     const name = selectedProduct ? selectedProduct.name : manualName.trim()
     if (!name) {
       setSaveError('Enter an item name, or pick one from the product search.')
@@ -395,7 +408,6 @@ export function RecordSaleSheet({
                   setQuery(e.target.value)
                   setSelectedProduct(null)
                   setSelectedVariantId(null)
-                  setManualName(e.target.value)
                 }}
                 onKeyDown={onEnterAdvance(afterItemAdvance)}
                 enterKeyHint="next"
@@ -490,6 +502,7 @@ export function RecordSaleSheet({
                 <Switch checked={costUnknown} onChange={setCostUnknown} label="I don't know the cost yet" />
                 {!costUnknown && (
                   <input
+                    ref={manualCostRef}
                     type="number"
                     min={0}
                     step="0.01"
