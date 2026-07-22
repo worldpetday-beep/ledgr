@@ -32,6 +32,7 @@ export interface Sale {
   currency: Currency
   timestamp: number // epoch ms
   customerNumber: number // running ticket number, never resets, never reused
+  customerName?: string // optional override label if the customer is known/renamed
   tbs: boolean // "to be shipped/picked up" — customer already paid, goods still in store
   pickedUp: boolean // for tbs sales: whether stock has actually been handed over yet
 }

@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE } from '../db'
 import { Card, Button, inputClass, Field } from '../components/ui'
+import { selectOnFocus } from '../lib/format'
 import { PlusIcon, TrashIcon } from '../components/icons'
 
 export default function Settings() {
@@ -98,6 +99,7 @@ export default function Settings() {
             step="1"
             className={inputClass + ' w-40'}
             value={rateValue}
+            onFocus={selectOnFocus}
             onChange={(e) => saveRate(e.target.value)}
           />
         </Field>

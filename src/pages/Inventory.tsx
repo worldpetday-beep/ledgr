@@ -4,7 +4,7 @@ import { db, DEFAULT_CATEGORIES, type Currency, type Item } from '../db'
 import { Card, Button, Modal, Field, inputClass, Badge, Switch, Pill } from '../components/ui'
 import { PlusIcon, SearchIcon, EditIcon, TrashIcon } from '../components/icons'
 import { ItemThumb } from '../components/ItemThumb'
-import { money, isLowStock } from '../lib/format'
+import { money, isLowStock, selectOnFocus } from '../lib/format'
 
 const emptyForm = {
   name: '',
@@ -303,7 +303,7 @@ export default function Inventory() {
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Sell price">
-              <input type="number" min={0} step="0.01" className={inputClass} value={form.sellPrice} onChange={(e) => setForm({ ...form, sellPrice: Number(e.target.value) || 0 })} />
+              <input type="number" min={0} step="0.01" className={inputClass} value={form.sellPrice} onFocus={selectOnFocus} onChange={(e) => setForm({ ...form, sellPrice: Number(e.target.value) || 0 })} />
             </Field>
             <Field label="Currency">
               <select className={inputClass} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value as Currency })}>
@@ -326,16 +326,17 @@ export default function Inventory() {
                 placeholder="Cost price"
                 className={inputClass + ' w-32'}
                 value={form.costPrice}
+                onFocus={selectOnFocus}
                 onChange={(e) => setForm({ ...form, costPrice: Number(e.target.value) || 0 })}
               />
             )}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Stock on hand">
-              <input type="number" min={0} className={inputClass} value={form.stock} onChange={(e) => setForm({ ...form, stock: Number(e.target.value) || 0 })} />
+              <input type="number" min={0} className={inputClass} value={form.stock} onFocus={selectOnFocus} onChange={(e) => setForm({ ...form, stock: Number(e.target.value) || 0 })} />
             </Field>
             <Field label="Low stock alert below">
-              <input type="number" min={0} className={inputClass} value={form.lowStockThreshold} onChange={(e) => setForm({ ...form, lowStockThreshold: Number(e.target.value) || 0 })} />
+              <input type="number" min={0} className={inputClass} value={form.lowStockThreshold} onFocus={selectOnFocus} onChange={(e) => setForm({ ...form, lowStockThreshold: Number(e.target.value) || 0 })} />
             </Field>
           </div>
           <div className="mt-2 flex justify-end gap-2">

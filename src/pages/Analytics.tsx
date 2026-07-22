@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type Currency } from '../db'
 import { Card, Button, inputClass } from '../components/ui'
-import { money, startOfDay } from '../lib/format'
-import { subDays, format } from 'date-fns'
+import { money, startOfDay, selectOnFocus, formatDateTimeMonrovia } from '../lib/format'
+import { subDays } from 'date-fns'
 import {
   ResponsiveContainer,
   BarChart,
@@ -200,7 +200,7 @@ export default function Analytics() {
                 {money(latestCount.usdActual, 'USD')} + {money(latestCount.lrdActual, 'LRD')}
               </div>
               <div className="text-xs text-[var(--text-muted)]">
-                Counted {format(latestCount.timestamp, 'MMM d, h:mm a')}{latestCount.note ? ` — ${latestCount.note}` : ''}
+                Counted {formatDateTimeMonrovia(latestCount.timestamp)}{latestCount.note ? ` — ${latestCount.note}` : ''}
               </div>
               <div className="tabular mt-1 text-xs">
                 <span className={latestCount.usdActual - allTimeTotals.USD < 0 ? 'text-[var(--status-critical)]' : 'text-[var(--status-good)]'}>
@@ -221,11 +221,11 @@ export default function Analytics() {
           <div className="flex flex-wrap items-end gap-2">
             <div className="flex flex-col gap-1">
               <span className="text-xs font-medium text-[var(--text-secondary)]">USD in drawer</span>
-              <input type="number" min={0} step="0.01" className={inputClass + ' w-28'} value={usdActual} onChange={(e) => setUsdActual(e.target.value)} />
+              <input type="number" min={0} step="0.01" className={inputClass + ' w-28'} value={usdActual} onFocus={selectOnFocus} onChange={(e) => setUsdActual(e.target.value)} />
             </div>
             <div className="flex flex-col gap-1">
               <span className="text-xs font-medium text-[var(--text-secondary)]">LRD in drawer</span>
-              <input type="number" min={0} step="0.01" className={inputClass + ' w-28'} value={lrdActual} onChange={(e) => setLrdActual(e.target.value)} />
+              <input type="number" min={0} step="0.01" className={inputClass + ' w-28'} value={lrdActual} onFocus={selectOnFocus} onChange={(e) => setLrdActual(e.target.value)} />
             </div>
             <div className="flex flex-1 flex-col gap-1">
               <span className="text-xs font-medium text-[var(--text-secondary)]">Note (optional)</span>

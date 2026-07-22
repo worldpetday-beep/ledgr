@@ -1,20 +1,36 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
+import { useLocation } from 'react-router-dom'
 import { db, profitOf, reserveNextCustomerNumber, peekNextCustomerNumber, NEXT_CUSTOMER_NUMBER_KEY, type Currency, type Item, type Sale } from '../db'
 import { Card, Button, Field, inputClass, Badge, Pill, Switch } from '../components/ui'
 import { ItemThumb } from '../components/ItemThumb'
-import { PlusIcon, SearchIcon, TrashIcon } from '../components/icons'
-import { money, startOfDay, endOfDay } from '../lib/format'
+import { PlusIcon, SearchIcon, TrashIcon, EditIcon } from '../components/icons'
+import { money, startOfDay, endOfDay, selectOnFocus, formatTimeMonrovia } from '../lib/format'
 import { format } from 'date-fns'
 
 const UNIT_TYPES = ['Piece', 'Carton', 'Sheet', 'Bundle', 'Yard', 'Gallon', 'Bucket', 'Pack', 'Other']
 
 export default function Sales() {
+  const location = useLocation()
   const [dateStr, setDateStr] = useState(() => format(Date.now(), 'yyyy-MM-dd'))
   const [formOpen, setFormOpen] = useState(true)
+  const [focusToken, setFocusToken] = useState(0)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editValue, setEditValue] = useState('')
 
   const dayStart = startOfDay(new Date(dateStr).getTime())
   const dayEnd = endOfDay(new Date(dateStr).getTime())
+
+  // The floating "+" button navigates here with a fresh state.record value
+  // each time, so it reliably reopens/refocuses the form even if we're
+  // already on this page.
+  useEffect(() => {
+    const record = (location.state as { record?: number } | null)?.record
+    if (record) {
+      setFormOpen(true)
+      setFocusToken(record)
+    }
+  }, [location.state])
 
   const sales = useLiveQuery(
     () => db.sales.where('timestamp').between(dayStart, dayEnd, true, true).reverse().sortBy('timestamp'),
@@ -54,6 +70,16 @@ export default function Sales() {
     })
   }
 
+  function startEdit(sale: Sale) {
+    setEditingId(sale.id!)
+    setEditValue(sale.customerName ?? '')
+  }
+
+  async function saveEdit(sale: Sale) {
+    await db.sales.update(sale.id!, { customerName: editValue.trim() || undefined })
+    setEditingId(null)
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -75,7 +101,7 @@ export default function Sales() {
         </div>
       </div>
 
-      {formOpen && <SaleForm />}
+      {formOpen && <SaleForm focusToken={focusToken} />}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card>
@@ -118,7 +144,30 @@ export default function Sales() {
               {(sales ?? []).map((s) => (
                 <tr key={s.id} className="border-t border-[var(--gridline)]">
                   <td className="py-2 pr-2">
-                    <Badge>#{s.customerNumber}</Badge>
+                    {editingId === s.id ? (
+                      <input
+                        autoFocus
+                        className={inputClass + ' w-28 py-1 text-xs'}
+                        value={editValue}
+                        placeholder={`Customer #${s.customerNumber}`}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onBlur={() => saveEdit(s)}
+                        onKeyDown={(e) => e.key === 'Enter' && saveEdit(s)}
+                      />
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs font-medium whitespace-nowrap">
+                          {s.customerName || `Customer #${s.customerNumber}`}
+                        </span>
+                        <button
+                          onClick={() => startEdit(s)}
+                          className="text-[var(--text-muted)] hover:text-[var(--series-1)]"
+                          aria-label="Rename customer"
+                        >
+                          <EditIcon className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
                   </td>
                   <td className="py-2 pr-2">
                     <div className="font-medium">{s.itemName}</div>
@@ -135,7 +184,7 @@ export default function Sales() {
                   <td className="tabular py-2 pr-2">{money(s.soldFor, s.currency)}</td>
                   <td className="tabular py-2 pr-2 text-[var(--text-muted)]">{money(s.costAtSale, s.currency)}</td>
                   <td className="tabular py-2 pr-2 text-[var(--status-good)]">{money(profitOf(s), s.currency)}</td>
-                  <td className="py-2 pr-2 text-[var(--text-muted)]">{format(s.timestamp, 'h:mm a')}</td>
+                  <td className="py-2 pr-2 text-[var(--text-muted)]">{formatTimeMonrovia(s.timestamp)}</td>
                   <td className="py-2 text-right">
                     <div className="flex items-center justify-end gap-2">
                       {s.tbs && !s.pickedUp && (
@@ -172,7 +221,7 @@ export default function Sales() {
   )
 }
 
-function SaleForm() {
+function SaleForm({ focusToken }: { focusToken: number }) {
   const items = useLiveQuery(() => db.items.orderBy('name').toArray(), [])
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Item | null>(null)
@@ -188,10 +237,17 @@ function SaleForm() {
   const [tbs, setTbs] = useState(false)
 
   const qtyRef = useRef<HTMLInputElement>(null)
-  const unitSelectRef = useRef<HTMLSelectElement>(null)
   const customUnitRef = useRef<HTMLInputElement>(null)
   const itemInputRef = useRef<HTMLInputElement>(null)
   const soldForRef = useRef<HTMLInputElement>(null)
+  const unitChipRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+
+  useEffect(() => {
+    if (focusToken) {
+      qtyRef.current?.focus()
+      qtyRef.current?.select()
+    }
+  }, [focusToken])
 
   const nextCounterRow = useLiveQuery(() => db.settings.get(NEXT_CUSTOMER_NUMBER_KEY), [])
   const nextNumber = peekNextCustomerNumber(nextCounterRow)
@@ -216,11 +272,12 @@ function SaleForm() {
     if (selected) setSoldFor(selected.sellPrice * next)
   }
 
-  function advanceFromUnit() {
-    if (unitType === 'Other') {
-      customUnitRef.current?.focus()
+  function chooseUnit(u: string) {
+    setUnitType(u)
+    if (u === 'Other') {
+      setTimeout(() => customUnitRef.current?.focus(), 0)
     } else {
-      itemInputRef.current?.focus()
+      setTimeout(() => itemInputRef.current?.focus(), 0)
     }
   }
 
@@ -311,7 +368,10 @@ function SaleForm() {
     setManualCost(0)
     setCostUnknown(true)
     setTbs(false)
-    qtyRef.current?.focus()
+    setTimeout(() => {
+      qtyRef.current?.focus()
+      qtyRef.current?.select()
+    }, 0)
   }
 
   return (
@@ -335,53 +395,52 @@ function SaleForm() {
       </div>
 
       <div className="flex flex-col gap-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Quantity">
+        <Field label="Quantity">
+          <input
+            ref={qtyRef}
+            type="number"
+            inputMode="numeric"
+            min={1}
+            className={inputClass}
+            value={qty}
+            onFocus={selectOnFocus}
+            onChange={(e) => changeQty(Number(e.target.value) || 1)}
+            onKeyDown={onEnterAdvance(() => unitChipRefs.current[unitType]?.focus())}
+            enterKeyHint="next"
+          />
+        </Field>
+
+        <Field label="Unit">
+          <div className="grid grid-cols-3 gap-1.5">
+            {UNIT_TYPES.map((u) => (
+              <button
+                key={u}
+                type="button"
+                ref={(el) => { unitChipRefs.current[u] = el }}
+                onClick={() => chooseUnit(u)}
+                onKeyDown={onEnterAdvance(() => chooseUnit(u))}
+                className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
+                  unitType === u
+                    ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
+                    : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
+                }`}
+              >
+                {u}
+              </button>
+            ))}
+          </div>
+          {unitType === 'Other' && (
             <input
-              ref={qtyRef}
-              type="number"
-              inputMode="numeric"
-              min={1}
-              className={inputClass}
-              value={qty}
-              onChange={(e) => changeQty(Number(e.target.value) || 1)}
-              onKeyDown={onEnterAdvance(() => unitSelectRef.current?.focus())}
+              ref={customUnitRef}
+              className={inputClass + ' mt-1.5'}
+              placeholder="Custom unit"
+              value={customUnit}
+              onChange={(e) => setCustomUnit(e.target.value)}
+              onKeyDown={onEnterAdvance(() => itemInputRef.current?.focus())}
               enterKeyHint="next"
             />
-          </Field>
-
-          <Field label="Unit">
-            <select
-              ref={unitSelectRef}
-              className={inputClass}
-              value={unitType}
-              onChange={(e) => {
-                setUnitType(e.target.value)
-                if (e.target.value === 'Other') {
-                  setTimeout(() => customUnitRef.current?.focus(), 0)
-                } else {
-                  setTimeout(() => itemInputRef.current?.focus(), 0)
-                }
-              }}
-              onKeyDown={onEnterAdvance(advanceFromUnit)}
-            >
-              {UNIT_TYPES.map((u) => (
-                <option key={u} value={u}>{u}</option>
-              ))}
-            </select>
-            {unitType === 'Other' && (
-              <input
-                ref={customUnitRef}
-                className={inputClass + ' mt-1.5'}
-                placeholder="Custom unit"
-                value={customUnit}
-                onChange={(e) => setCustomUnit(e.target.value)}
-                onKeyDown={onEnterAdvance(() => itemInputRef.current?.focus())}
-                enterKeyHint="next"
-              />
-            )}
-          </Field>
-        </div>
+          )}
+        </Field>
 
         <Field label="Item">
           <div className="relative flex items-center gap-2">
@@ -432,6 +491,7 @@ function SaleForm() {
             step="0.01"
             className={inputClass}
             value={soldFor}
+            onFocus={selectOnFocus}
             onChange={(e) => setSoldFor(Number(e.target.value) || 0)}
             onKeyDown={onEnterAdvance(() => submit())}
             enterKeyHint="done"
@@ -449,6 +509,7 @@ function SaleForm() {
                 placeholder="Cost (total)"
                 className={inputClass + ' w-36'}
                 value={manualCost}
+                onFocus={selectOnFocus}
                 onChange={(e) => setManualCost(Number(e.target.value) || 0)}
               />
             )}
