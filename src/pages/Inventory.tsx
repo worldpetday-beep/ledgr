@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, DEFAULT_CATEGORIES, UNIT_TYPES, type Currency, type Product, type Variant, type TransferDirection } from '../db'
-import { Button, Modal, Field, inputClass, Switch, Pill, BottomSheet } from '../components/ui'
-import { PlusIcon, SearchIcon, TrashIcon, SettingsIcon, MoreVerticalIcon, SortIcon, FilterIcon, BoxesIcon, ChartIcon } from '../components/icons'
+import { db, DEFAULT_CATEGORIES, UNIT_TYPES, type Product, type Variant, type TransferDirection } from '../db'
+import { Button, Modal, Field, inputClass, Pill, BottomSheet } from '../components/ui'
+import { PlusIcon, SearchIcon, SettingsIcon, MoreVerticalIcon, SortIcon, FilterIcon, BoxesIcon, ChartIcon } from '../components/icons'
 import { ItemThumb } from '../components/ItemThumb'
+import { ProductDetailView } from '../components/ProductDetailView'
 import {
   ShopifyShell,
   ShopifyHeaderIconButton,
@@ -23,42 +24,6 @@ function hasMissingCost(v: Variant): boolean {
 
 function availableOf(variants: Variant[]): number {
   return variants.reduce((s, v) => s + v.stockMyShop + v.stockVishalShop, 0)
-}
-
-interface VariantRow {
-  key: string
-  id?: number
-  label: string
-  sku: string
-  costPrice: number
-  costUnknown: boolean
-  sellPrice: number
-  currency: Currency
-  stockMyShop: number
-  stockVishalShop: number
-  lowStockThreshold: number
-}
-
-function blankVariantRow(order: number): VariantRow {
-  return {
-    key: `new-${Date.now()}-${order}-${Math.random().toString(36).slice(2)}`,
-    label: order === 0 ? 'Standard' : '',
-    sku: '',
-    costPrice: 0,
-    costUnknown: true,
-    sellPrice: 0,
-    currency: 'USD',
-    stockMyShop: 0,
-    stockVishalShop: 0,
-    lowStockThreshold: 3,
-  }
-}
-
-const emptyProductForm = {
-  name: '',
-  category: DEFAULT_CATEGORIES[0],
-  image: undefined as Blob | undefined,
-  archived: false,
 }
 
 type Chip = 'all' | 'lowStock' | 'missingCost' | 'sourcedVishal' | 'archived'
@@ -92,10 +57,7 @@ export default function Inventory() {
   const [sourceLocationFilter, setSourceLocationFilter] = useState<SourceLocationFilter>('all')
   const [priceBaselineFilter, setPriceBaselineFilter] = useState<PriceBaselineFilter>('all')
 
-  const [modalOpen, setModalOpen] = useState(false)
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
-  const [productForm, setProductForm] = useState(emptyProductForm)
-  const [variantRows, setVariantRows] = useState<VariantRow[]>([blankVariantRow(0)])
+  const [detailProductId, setDetailProductId] = useState<number | 'new' | null>(null)
 
   const [unitsModalOpen, setUnitsModalOpen] = useState(false)
   const [unitsCategoryName, setUnitsCategoryName] = useState('')
@@ -203,114 +165,6 @@ export default function Inventory() {
     return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]))
   }, [filtered])
 
-  function openAdd() {
-    setEditingProduct(null)
-    setProductForm(emptyProductForm)
-    setVariantRows([blankVariantRow(0)])
-    setModalOpen(true)
-  }
-
-  function openEdit(product: Product) {
-    setEditingProduct(product)
-    setProductForm({ name: product.name, category: product.category, image: product.image, archived: product.archived })
-    const variants = variantsByProduct.get(product.id!) ?? []
-    setVariantRows(
-      variants.length > 0
-        ? variants.map((v) => ({
-            key: String(v.id),
-            id: v.id,
-            label: v.label,
-            sku: v.sku ?? '',
-            costPrice: v.costPrice,
-            costUnknown: v.costUnknown,
-            sellPrice: v.sellPrice,
-            currency: v.currency,
-            stockMyShop: v.stockMyShop,
-            stockVishalShop: v.stockVishalShop,
-            lowStockThreshold: v.lowStockThreshold,
-          }))
-        : [blankVariantRow(0)],
-    )
-    setModalOpen(true)
-  }
-
-  function updateVariantRow(key: string, patch: Partial<VariantRow>) {
-    setVariantRows((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)))
-  }
-
-  function addVariantRow() {
-    setVariantRows((rows) => [...rows, blankVariantRow(rows.length)])
-  }
-
-  function removeVariantRow(key: string) {
-    setVariantRows((rows) => (rows.length > 1 ? rows.filter((r) => r.key !== key) : rows))
-  }
-
-  function moveVariantRow(key: string, dir: -1 | 1) {
-    setVariantRows((rows) => {
-      const idx = rows.findIndex((r) => r.key === key)
-      const swapWith = idx + dir
-      if (idx < 0 || swapWith < 0 || swapWith >= rows.length) return rows
-      const next = [...rows]
-      ;[next[idx], next[swapWith]] = [next[swapWith], next[idx]]
-      return next
-    })
-  }
-
-  async function saveProduct() {
-    if (!productForm.name.trim()) return
-    const now = Date.now()
-    await db.transaction('rw', db.products, db.variants, async () => {
-      let productId: number
-      if (editingProduct?.id) {
-        productId = editingProduct.id
-        await db.products.update(productId, { ...productForm, updatedAt: now })
-      } else {
-        productId = (await db.products.add({ ...productForm, createdAt: now, updatedAt: now })) as number
-      }
-
-      const existingIds = new Set((variantsByProduct.get(productId) ?? []).map((v) => v.id))
-      const keptIds = new Set<number>()
-
-      for (const [idx, row] of variantRows.entries()) {
-        const payload = {
-          productId,
-          label: row.label.trim() || 'Standard',
-          sku: row.sku.trim() || undefined,
-          costPrice: row.costUnknown ? 0 : row.costPrice,
-          costUnknown: row.costUnknown,
-          sellPrice: row.sellPrice,
-          currency: row.currency,
-          stockMyShop: row.stockMyShop,
-          stockVishalShop: row.stockVishalShop,
-          lowStockThreshold: row.lowStockThreshold,
-          order: idx,
-          updatedAt: now,
-        }
-        if (row.id) {
-          await db.variants.update(row.id, payload)
-          keptIds.add(row.id)
-        } else {
-          await db.variants.add({ ...payload, createdAt: now })
-        }
-      }
-
-      for (const id of existingIds) {
-        if (id && !keptIds.has(id)) await db.variants.delete(id)
-      }
-    })
-    setModalOpen(false)
-  }
-
-  async function removeProduct(product: Product) {
-    await db.transaction('rw', db.products, db.variants, async () => {
-      const vs = variantsByProduct.get(product.id!) ?? []
-      await db.variants.bulkDelete(vs.map((v) => v.id!))
-      await db.products.delete(product.id!)
-    })
-    setModalOpen(false)
-  }
-
   const transferVariantOptions = transferProductId ? variantsByProduct.get(transferProductId) ?? [] : []
 
   async function submitTransfer() {
@@ -330,13 +184,11 @@ export default function Inventory() {
     await db.transaction('rw', db.variants, db.stockTransfers, async () => {
       const variant = await db.variants.get(variantId)
       if (!variant) return
-      const fromField = transferDirection === 'out' ? 'stockMyShop' : 'stockVishalShop'
-      const toField = transferDirection === 'out' ? 'stockVishalShop' : 'stockMyShop'
-      await db.variants.update(variantId, {
-        [fromField]: Math.max(0, variant[fromField] - transferQty),
-        [toField]: variant[toField] + transferQty,
-        updatedAt: Date.now(),
-      })
+      const updated =
+        transferDirection === 'out'
+          ? { stockMyShop: Math.max(0, variant.stockMyShop - transferQty), stockVishalShop: variant.stockVishalShop + transferQty }
+          : { stockVishalShop: Math.max(0, variant.stockVishalShop - transferQty), stockMyShop: variant.stockMyShop + transferQty }
+      await db.variants.update(variantId, { ...updated, updatedAt: Date.now() })
       await db.stockTransfers.add({
         variantId,
         productId,
@@ -385,7 +237,7 @@ export default function Inventory() {
       title="Products"
       headerRight={
         <>
-          <ShopifyHeaderIconButton onClick={openAdd} label="Add product">
+          <ShopifyHeaderIconButton onClick={() => setDetailProductId('new')} label="Add product">
             <PlusIcon className="h-5 w-5" />
           </ShopifyHeaderIconButton>
           <ShopifyHeaderIconButton onClick={() => setMoreMenuOpen(true)} label="More options">
@@ -430,10 +282,10 @@ export default function Inventory() {
               return (
                 <button
                   key={product.id}
-                  onClick={() => openEdit(product)}
+                  onClick={() => setDetailProductId(product.id!)}
                   className={`flex w-full items-center gap-3 py-3 text-left ${idx > 0 ? 'border-t border-gray-100' : ''}`}
                 >
-                  <ItemThumb image={product.image} size={48} className="!rounded-lg !bg-gray-100 !text-gray-400" />
+                  <ItemThumb image={product.images[0]} size={48} className="!rounded-lg !bg-gray-100 !text-gray-400" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-semibold text-black">{product.name}</div>
                     <div className="truncate text-sm text-gray-500">
@@ -465,11 +317,11 @@ export default function Inventory() {
                       return (
                         <button
                           key={product.id}
-                          onClick={() => openEdit(product)}
+                          onClick={() => setDetailProductId(product.id!)}
                           style={{ borderColor: toneColor, transform: `scale(${scale})`, transformOrigin: 'center' }}
                           className="flex min-w-[110px] flex-col items-center gap-1.5 rounded-xl border-2 bg-gray-50 px-3 py-2.5 text-center transition-transform"
                         >
-                          <ItemThumb image={product.image} size={36} className="!bg-gray-200 !text-gray-400" />
+                          <ItemThumb image={product.images[0]} size={36} className="!bg-gray-200 !text-gray-400" />
                           <span className="line-clamp-1 text-xs font-medium text-black">{product.name}</span>
                           <span className="tabular text-sm font-semibold" style={{ color: toneColor }}>
                             {stock}
@@ -697,193 +549,12 @@ export default function Inventory() {
         </div>
       </BottomSheet>
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editingProduct ? 'Edit product' : 'Add product'}>
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-3">
-            <ItemThumb image={productForm.image} size={56} />
-            <label className="cursor-pointer text-sm font-medium text-[var(--series-1)]">
-              {productForm.image ? 'Change photo' : 'Add photo'}
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) setProductForm({ ...productForm, image: file })
-                }}
-              />
-            </label>
-            {productForm.image && (
-              <button onClick={() => setProductForm({ ...productForm, image: undefined })} className="text-sm text-[var(--text-muted)] hover:text-[var(--status-critical)]">
-                Remove
-              </button>
-            )}
-          </div>
-
-          <Field label="Product name">
-            <input className={inputClass} value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} />
-          </Field>
-
-          <Field label="Category">
-            <input
-              list="category-list"
-              className={inputClass}
-              value={productForm.category}
-              onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
-            />
-            <datalist id="category-list">
-              {allCategories.map((c) => <option key={c} value={c} />)}
-            </datalist>
-          </Field>
-
-          <div className="flex items-center gap-2 rounded-lg bg-[var(--page-plane)] px-2.5 py-2">
-            <Switch
-              checked={productForm.archived}
-              onChange={(v) => setProductForm({ ...productForm, archived: v })}
-              label="Archived — hidden from the main product feed"
-            />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-[var(--text-secondary)]">
-                Variants <span className="text-[var(--text-muted)]">(cheapest first)</span>
-              </span>
-              <Button variant="secondary" onClick={addVariantRow}>
-                <PlusIcon className="h-3.5 w-3.5" />
-                Add variant
-              </Button>
-            </div>
-
-            {variantRows.map((row, idx) => (
-              <div key={row.key} className="flex flex-col gap-2 rounded-lg border border-[var(--border)] p-3">
-                <div className="flex items-center gap-2">
-                  <input
-                    className={inputClass}
-                    placeholder='Variant label, e.g. "Double, Foam, Grade A"'
-                    value={row.label}
-                    onChange={(e) => updateVariantRow(row.key, { label: e.target.value })}
-                  />
-                  <button
-                    disabled={idx === 0}
-                    onClick={() => moveVariantRow(row.key, -1)}
-                    className="text-[var(--text-muted)] hover:text-[var(--series-1)] disabled:opacity-30"
-                    aria-label="Move up"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    disabled={idx === variantRows.length - 1}
-                    onClick={() => moveVariantRow(row.key, 1)}
-                    className="text-[var(--text-muted)] hover:text-[var(--series-1)] disabled:opacity-30"
-                    aria-label="Move down"
-                  >
-                    ▼
-                  </button>
-                  <button
-                    disabled={variantRows.length === 1}
-                    onClick={() => removeVariantRow(row.key)}
-                    className="text-[var(--text-muted)] hover:text-[var(--status-critical)] disabled:opacity-30"
-                    aria-label="Remove variant"
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    className={inputClass}
-                    placeholder="SKU / barcode (optional)"
-                    value={row.sku}
-                    onChange={(e) => updateVariantRow(row.key, { sku: e.target.value })}
-                  />
-                  <select
-                    className={inputClass}
-                    value={row.currency}
-                    onChange={(e) => updateVariantRow(row.key, { currency: e.target.value as Currency })}
-                  >
-                    <option value="USD">USD</option>
-                    <option value="LRD">LRD</option>
-                  </select>
-                </div>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  placeholder="Sell price"
-                  className={inputClass}
-                  value={row.sellPrice}
-                  onFocus={selectOnFocus}
-                  onChange={(e) => updateVariantRow(row.key, { sellPrice: Number(e.target.value) || 0 })}
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="number"
-                    min={0}
-                    placeholder="Stock — My Shop"
-                    className={inputClass}
-                    value={row.stockMyShop}
-                    onFocus={selectOnFocus}
-                    onChange={(e) => updateVariantRow(row.key, { stockMyShop: Number(e.target.value) || 0 })}
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    placeholder="Stock — Vishal's Shop"
-                    className={inputClass}
-                    value={row.stockVishalShop}
-                    onFocus={selectOnFocus}
-                    onChange={(e) => updateVariantRow(row.key, { stockVishalShop: Number(e.target.value) || 0 })}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="number"
-                    min={0}
-                    placeholder="Low stock alert below"
-                    className={inputClass}
-                    value={row.lowStockThreshold}
-                    onFocus={selectOnFocus}
-                    onChange={(e) => updateVariantRow(row.key, { lowStockThreshold: Number(e.target.value) || 0 })}
-                  />
-                  <div className="flex items-center gap-2 rounded-lg bg-[var(--page-plane)] px-2.5">
-                    <Switch
-                      checked={row.costUnknown}
-                      onChange={(v) => updateVariantRow(row.key, { costUnknown: v, costPrice: v ? 0 : row.costPrice })}
-                      label="Crossed cost price unknown"
-                    />
-                  </div>
-                </div>
-                {!row.costUnknown && (
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    placeholder="Crossed Cost Price"
-                    className={inputClass}
-                    value={row.costPrice}
-                    onFocus={selectOnFocus}
-                    onChange={(e) => updateVariantRow(row.key, { costPrice: Number(e.target.value) || 0 })}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-2 flex items-center justify-between gap-2">
-            {editingProduct ? (
-              <Button variant="danger" onClick={() => removeProduct(editingProduct)}>
-                <TrashIcon className="h-4 w-4" />
-                Delete product
-              </Button>
-            ) : <span />}
-            <div className="flex gap-2">
-              <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button>
-              <Button onClick={saveProduct}>{editingProduct ? 'Save changes' : 'Add product'}</Button>
-            </div>
-          </div>
-        </div>
-      </Modal>
+      {detailProductId != null && (
+        <ProductDetailView
+          productId={detailProductId === 'new' ? undefined : detailProductId}
+          onClose={() => setDetailProductId(null)}
+        />
+      )}
 
       <Modal open={unitsModalOpen} onClose={() => setUnitsModalOpen(false)} title="Units per category">
         <div className="flex flex-col gap-3">

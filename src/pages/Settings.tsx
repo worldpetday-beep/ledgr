@@ -60,8 +60,8 @@ export default function Settings() {
         const productIdMap = new Map<number, number>()
         if (Array.isArray(data.products)) {
           for (const product of data.products) {
-            const { id, ...rest } = product
-            const newId = (await db.products.add({ archived: false, ...rest })) as number
+            const { id, image, ...rest } = product
+            const newId = (await db.products.add({ archived: false, description: '', images: [], options: [], ...rest })) as number
             if (id != null) productIdMap.set(id, newId)
           }
         }
@@ -70,7 +70,7 @@ export default function Settings() {
           for (const variant of data.variants) {
             const { id, productId, ...rest } = variant
             const newProductId = productIdMap.get(productId) ?? productId
-            const newId = (await db.variants.add({ ...rest, productId: newProductId })) as number
+            const newId = (await db.variants.add({ optionValues: [], ...rest, productId: newProductId })) as number
             if (id != null) variantIdMap.set(id, newId)
           }
         }

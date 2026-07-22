@@ -244,6 +244,7 @@ export function RecordSaleSheet({
                 variantId = await db.variants.add({
                   productId: existingProduct.id!,
                   label: newLabel,
+                  optionValues: [],
                   costPrice: costUnknown ? 0 : line.manualCost,
                   costUnknown,
                   sellPrice: line.qty > 0 ? line.soldFor / line.qty : line.soldFor,
@@ -258,12 +259,22 @@ export function RecordSaleSheet({
                 variantLabel = newLabel
               }
             } else {
-              productId = (await db.products.add({ name: line.name, category: 'General', archived: false, createdAt: now, updatedAt: now })) as number
+              productId = (await db.products.add({
+                name: line.name,
+                category: 'General',
+                description: '',
+                images: [],
+                options: [],
+                archived: false,
+                createdAt: now,
+                updatedAt: now,
+              })) as number
               productCategory = 'General'
               variantLabel = line.manualVariant.trim() || 'Standard'
               variantId = await db.variants.add({
                 productId,
                 label: variantLabel,
+                optionValues: [],
                 costPrice: costUnknown ? 0 : line.manualCost,
                 costUnknown,
                 sellPrice: line.qty > 0 ? line.soldFor / line.qty : line.soldFor,
@@ -571,7 +582,7 @@ const SaleLineItem = forwardRef<
 
       <Field label="Item">
         <div className="relative flex items-center gap-2">
-          {line.selectedProduct && <ItemThumb image={line.selectedProduct.image} size={36} />}
+          {line.selectedProduct && <ItemThumb image={line.selectedProduct.images[0]} size={36} />}
           <div className="relative flex-1">
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
             <input
@@ -591,7 +602,7 @@ const SaleLineItem = forwardRef<
                     onClick={() => pickProduct(p)}
                     className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-[var(--page-plane)]"
                   >
-                    <ItemThumb image={p.image} size={28} />
+                    <ItemThumb image={p.images[0]} size={28} />
                     <span className="flex-1">{p.name}</span>
                     <span className="tabular text-xs text-[var(--text-muted)]">{productStock.get(p.id!) ?? 0} in stock</span>
                   </button>

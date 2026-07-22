@@ -4,11 +4,18 @@ export type Currency = 'USD' | 'LRD'
 
 export const UNIT_TYPES = ['Piece', 'Carton', 'Sheet', 'Bundle', 'Yard', 'Gallon', 'Bucket', 'Pack', 'Other']
 
+export interface ProductOption {
+  name: string // e.g. "Size", "Color"
+  values: string[] // e.g. ["18x18", "24x24"]
+}
+
 export interface Product {
   id?: number
   name: string
   category: string
-  image?: Blob
+  description: string
+  images: Blob[]
+  options: ProductOption[] // structured Size/Color-style options; empty = freeform single/multi-variant product
   archived: boolean // true = deactivated/discontinued, hidden from the main product feed
   createdAt: number
   updatedAt: number
@@ -18,6 +25,7 @@ export interface Variant {
   id?: number
   productId: number
   label: string // e.g. "Double, Foam, Grade A", "Blue Gallon", or "Standard"
+  optionValues: string[] // parallel to Product.options — the combination this variant represents; empty for freeform variants
   sku?: string
   costPrice: number
   costUnknown: boolean // true when cost hasn't been entered yet (quick sale of a walk-in item)
@@ -272,6 +280,28 @@ db.version(8)
   .upgrade(async (tx) => {
     await tx.table('products').toCollection().modify((product) => {
       product.archived = false
+    })
+  })
+
+// v9: move from a single Product.image to a Product.images[] gallery, add a
+// Description field, and add structured Options (e.g. Size/Color) with a
+// parallel Variant.optionValues[] so option-based variants can be generated
+// as a matrix while existing freeform-labeled variants keep working as-is
+// (they just get an empty optionValues array).
+db.version(9)
+  .stores({
+    products: '++id, name, category, createdAt, archived',
+    variants: '++id, productId, label, sku, stockMyShop, stockVishalShop, costUnknown, order',
+  })
+  .upgrade(async (tx) => {
+    await tx.table('products').toCollection().modify((product) => {
+      product.images = product.image ? [product.image] : []
+      delete product.image
+      product.description = product.description ?? ''
+      product.options = product.options ?? []
+    })
+    await tx.table('variants').toCollection().modify((variant) => {
+      variant.optionValues = variant.optionValues ?? []
     })
   })
 
