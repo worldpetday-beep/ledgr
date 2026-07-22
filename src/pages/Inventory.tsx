@@ -9,23 +9,18 @@ import { format } from 'date-fns'
 
 // Missing cost = never entered (costUnknown) OR left at a literal zero,
 // which in practice almost always means the same thing: nobody's typed a
-// real cost in yet. Both trigger the red "Cost Missing" alert.
+// real cost in yet.
 function hasMissingCost(v: Variant): boolean {
   return v.costUnknown || !v.costPrice
 }
 
 function CostTag({ variant }: { variant: Variant }) {
-  if (hasMissingCost(variant)) {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--status-critical)] px-2 py-0.5 text-xs font-bold text-white">
-        <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white text-[10px] font-bold text-[var(--status-critical)]">!</span>
-        Cost Missing
-      </span>
-    )
-  }
   return (
-    <span className="tabular shrink-0 text-sm font-semibold text-[var(--text-primary)]">
-      {money(variant.costPrice, variant.currency)}
+    <span className="tabular shrink-0 text-sm text-[var(--text-secondary)]">
+      Crossed Cost Price:{' '}
+      <span className="font-semibold text-[var(--text-primary)]">
+        {hasMissingCost(variant) ? '—' : money(variant.costPrice, variant.currency)}
+      </span>
     </span>
   )
 }
@@ -366,7 +361,7 @@ export default function Inventory() {
                 : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
             }`}
           >
-            Missing cost <Badge tone="warning">{missingCostCount}</Badge>
+            Missing cost <Badge tone="muted">{missingCostCount}</Badge>
           </button>
         )}
       </div>
@@ -470,92 +465,84 @@ export default function Inventory() {
       </Card>
 
       {view === 'list' ? (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2.5">
           {filtered.map((product) => {
             const variants = variantsByProduct.get(product.id!) ?? []
             const stockMySum = variants.reduce((s, v) => s + v.stockMyShop, 0)
             const stockVishalSum = variants.reduce((s, v) => s + v.stockVishalShop, 0)
             const lowAny = variants.some((v) => isLowStock(v.stockMyShop, v.lowStockThreshold))
-            const anyMissingCost = variants.some(hasMissingCost)
             const expanded = expandedId === product.id
             const single = variants.length <= 1
             const onlyVariant = variants[0]
 
             return (
-              <Card key={product.id}>
-                <div className="flex items-start gap-3">
-                  <ItemThumb image={product.image} size={40} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-2">
-                      <h3 className="truncate text-base font-semibold">{product.name}</h3>
-                      <div className="flex shrink-0 gap-2">
-                        <button onClick={() => openEdit(product)} className="text-[var(--text-muted)] hover:text-[var(--series-1)]" aria-label="Edit">
-                          <EditIcon className="h-4 w-4" />
-                        </button>
-                        <button onClick={() => removeProduct(product)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Delete">
-                          <TrashIcon className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                    <div className="text-xs text-[var(--text-muted)]">{product.category}</div>
+              <Card key={product.id} className="py-3">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <ItemThumb image={product.image} size={36} />
 
+                  <div className="min-w-[140px] flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-medium">{product.name}</span>
+                      <span className="shrink-0 text-xs text-[var(--text-muted)]">{product.category}</span>
+                    </div>
                     {single ? (
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        {onlyVariant && onlyVariant.label !== 'Standard' && (
-                          <span className="text-sm text-[var(--text-secondary)]">{onlyVariant.label}</span>
-                        )}
-                        {onlyVariant ? (
-                          <CostTag variant={onlyVariant} />
-                        ) : (
-                          <span className="text-xs text-[var(--text-muted)]">No variant yet</span>
-                        )}
-                      </div>
+                      onlyVariant && onlyVariant.label !== 'Standard' ? (
+                        <span className="text-xs text-[var(--text-secondary)]">{onlyVariant.label}</span>
+                      ) : null
                     ) : (
                       <button
                         onClick={() => setExpandedId(expanded ? null : product.id!)}
-                        className="mt-2 flex items-center gap-1.5 text-sm font-medium text-[var(--series-1)]"
+                        className="text-xs font-medium text-[var(--series-1)]"
                       >
-                        {variants.length} variants
-                        {anyMissingCost && (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-[var(--status-critical)] text-[10px] font-bold text-white">
-                            !
-                          </span>
-                        )}
-                        <span className="text-xs">{expanded ? '▾' : '▸'}</span>
+                        {variants.length} variants {expanded ? '▾' : '▸'}
                       </button>
                     )}
+                  </div>
 
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-muted)]">
-                      <span className="tabular">
-                        My Shop: <span className="font-medium text-[var(--text-secondary)]">{stockMySum}</span>
-                      </span>
-                      <span className="tabular">
-                        Vishal's: <span className="font-medium text-[var(--text-secondary)]">{stockVishalSum}</span>
-                      </span>
-                      {lowAny && <Badge tone="critical">Low stock</Badge>}
-                    </div>
+                  <div className="tabular shrink-0 text-xs text-[var(--text-muted)]">
+                    My: <span className="font-medium text-[var(--text-secondary)]">{stockMySum}</span>
+                    {' · '}
+                    Vishal's: <span className="font-medium text-[var(--text-secondary)]">{stockVishalSum}</span>
+                    {lowAny && <span className="ml-1 text-[var(--status-warning)]">low</span>}
+                  </div>
 
-                    {!single && expanded && (
-                      <div className="mt-3 flex flex-col gap-2.5 border-t border-[var(--gridline)] pt-3">
-                        {variants.map((v) => (
-                          <div key={v.id} className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-medium">
-                                {v.label}
-                                {v.sku && <span className="ml-1 text-xs text-[var(--text-muted)]">#{v.sku}</span>}
-                              </div>
-                              <div className="tabular text-xs text-[var(--text-muted)]">
-                                {v.stockMyShop} mine · {v.stockVishalShop} Vishal's
-                                {isLowStock(v.stockMyShop, v.lowStockThreshold) && ' · low'}
-                              </div>
-                            </div>
-                            <CostTag variant={v} />
-                          </div>
-                        ))}
-                      </div>
+                  <div className="shrink-0">
+                    {single && onlyVariant ? (
+                      <CostTag variant={onlyVariant} />
+                    ) : (
+                      <span className="text-xs text-[var(--text-muted)]">multiple prices</span>
                     )}
                   </div>
+
+                  <div className="ml-auto flex shrink-0 gap-2">
+                    <button onClick={() => openEdit(product)} className="text-[var(--text-muted)] hover:text-[var(--series-1)]" aria-label="Edit">
+                      <EditIcon className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => removeProduct(product)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Delete">
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
+
+                {!single && expanded && (
+                  <div className="mt-3 flex flex-col gap-2 border-t border-[var(--gridline)] pt-3 pl-[52px]">
+                    {variants.map((v) => (
+                      <div key={v.id} className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0 text-sm font-medium">
+                          {v.label}
+                          {v.sku && <span className="ml-1 text-xs font-normal text-[var(--text-muted)]">#{v.sku}</span>}
+                        </div>
+                        <div className="tabular text-xs text-[var(--text-muted)]">
+                          {v.stockMyShop} mine · {v.stockVishalShop} Vishal's
+                          {isLowStock(v.stockMyShop, v.lowStockThreshold) && (
+                            <span className="ml-1 text-[var(--status-warning)]">low</span>
+                          )}
+                        </div>
+                        <CostTag variant={v} />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Card>
             )
           })}
@@ -579,12 +566,10 @@ export default function Inventory() {
                   {catProducts.map((product) => {
                     const variants = variantsByProduct.get(product.id!) ?? []
                     const stock = stockOf(product)
-                    const low = variants.some((v) => isLowStock(v.stockMyShop, v.lowStockThreshold))
                     const ok = variants.length > 0 && variants.every((v) => v.stockMyShop > v.lowStockThreshold * 2)
-                    const tone = low ? 'critical' : ok ? 'good' : 'warning'
                     const scale = 0.85 + 0.65 * Math.min(1, stock / maxStock)
-                    const toneColor =
-                      tone === 'critical' ? 'var(--status-critical)' : tone === 'good' ? 'var(--status-good)' : 'var(--status-warning)'
+                    // Low stock reads as amber, not a loud red alert.
+                    const toneColor = ok ? 'var(--status-good)' : 'var(--status-warning)'
                     return (
                       <button
                         key={product.id}
@@ -763,7 +748,7 @@ export default function Inventory() {
                     <Switch
                       checked={row.costUnknown}
                       onChange={(v) => updateVariantRow(row.key, { costUnknown: v, costPrice: v ? 0 : row.costPrice })}
-                      label="Cost unknown"
+                      label="Crossed cost price unknown"
                     />
                   </div>
                 </div>
@@ -772,7 +757,7 @@ export default function Inventory() {
                     type="number"
                     min={0}
                     step="0.01"
-                    placeholder="Cost price"
+                    placeholder="Crossed Cost Price"
                     className={inputClass}
                     value={row.costPrice}
                     onFocus={selectOnFocus}

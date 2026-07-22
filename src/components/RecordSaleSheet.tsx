@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   db,
@@ -7,13 +15,70 @@ import {
   NEXT_CUSTOMER_NUMBER_KEY,
   UNIT_TYPES,
   type Currency,
+  type Category,
   type Product,
   type Variant,
 } from '../db'
 import { BottomSheet, Button, Field, inputClass, Badge, Pill, Switch } from './ui'
 import { ItemThumb } from './ItemThumb'
-import { SearchIcon } from './icons'
+import { SearchIcon, PlusIcon, TrashIcon } from './icons'
 import { money, selectOnFocus } from '../lib/format'
+
+interface SaleLineState {
+  key: string
+  query: string
+  selectedProduct: Product | null
+  selectedVariantId: number | null
+  qty: number
+  unitType: string
+  customUnit: string
+  manualVariant: string
+  soldFor: number
+  currency: Currency
+  manualCost: number
+}
+
+function blankLine(currency: Currency = 'USD'): SaleLineState {
+  return {
+    key: `line-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    query: '',
+    selectedProduct: null,
+    selectedVariantId: null,
+    qty: 1,
+    unitType: 'Piece',
+    customUnit: '',
+    manualVariant: '',
+    soldFor: 0,
+    currency,
+    manualCost: 0,
+  }
+}
+
+interface LineLiveValues {
+  name: string
+  qty: number
+  soldFor: number
+  manualVariant: string
+  manualCost: number
+}
+
+interface LineHandle {
+  getLiveValues(): LineLiveValues
+  focusQty(): void
+}
+
+function sumByCurrency(lines: { currency: Currency; amount: number }[]): Partial<Record<Currency, number>> {
+  const totals: Partial<Record<Currency, number>> = {}
+  for (const l of lines) totals[l.currency] = (totals[l.currency] ?? 0) + l.amount
+  return totals
+}
+
+function formatCurrencyTotals(totals: Partial<Record<Currency, number>>): string {
+  const parts = (Object.entries(totals) as [Currency, number][])
+    .filter(([, amt]) => amt !== 0)
+    .map(([cur, amt]) => money(amt, cur))
+  return parts.length > 0 ? parts.join(' + ') : money(0, 'USD')
+}
 
 export function RecordSaleSheet({
   open,
@@ -32,31 +97,13 @@ export function RecordSaleSheet({
   const allVariants = useLiveQuery(() => (open ? db.variants.toArray() : []), [open])
   const categories = useLiveQuery(() => (open ? db.categories.toArray() : []), [open])
 
-  const [query, setQuery] = useState('')
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
-  const [selectedVariantId, setSelectedVariantId] = useState<number | null>(null)
-  const [qty, setQty] = useState(1)
-  const [unitType, setUnitType] = useState('Piece')
-  const [customUnit, setCustomUnit] = useState('')
-  const [soldFor, setSoldFor] = useState<number>(0)
-  const [currency, setCurrency] = useState<Currency>('USD')
-  const [manualVariant, setManualVariant] = useState('')
-  const [manualCost, setManualCost] = useState<number>(0)
-  const [costUnknown, setCostUnknown] = useState(true)
+  const [lines, setLines] = useState<SaleLineState[]>([blankLine()])
   const [sameAsLast, setSameAsLast] = useState(false)
   const [tbs, setTbs] = useState(false)
-  const [moreOpen, setMoreOpen] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const qtyRef = useRef<HTMLInputElement>(null)
-  const customUnitRef = useRef<HTMLInputElement>(null)
-  const itemInputRef = useRef<HTMLInputElement>(null)
-  const manualVariantRef = useRef<HTMLInputElement>(null)
-  const manualCostRef = useRef<HTMLInputElement>(null)
-  const soldForRef = useRef<HTMLInputElement>(null)
-  const unitChipRefs = useRef<Record<string, HTMLButtonElement | null>>({})
-  const variantChipRefs = useRef<Record<number, HTMLButtonElement | null>>({})
+  const lineHandles = useRef(new Map<string, LineHandle>())
 
   const nextCounterRow = useLiveQuery(() => (open ? db.settings.get(NEXT_CUSTOMER_NUMBER_KEY) : undefined), [open])
   const nextNumber = peekNextCustomerNumber(nextCounterRow)
@@ -82,20 +129,312 @@ export function RecordSaleSheet({
     return map
   }, [variantsByProduct])
 
-  const filteredProducts = useMemo(() => {
-    if (!query.trim()) return (products ?? []).slice(0, 8)
-    const q = query.toLowerCase()
-    return (products ?? []).filter((p) => p.name.toLowerCase().includes(q)).slice(0, 8)
-  }, [products, query])
+  // Reset the whole sheet each time it's opened fresh.
+  useEffect(() => {
+    if (open) {
+      setLines([blankLine()])
+      setSameAsLast(false)
+      setTbs(false)
+      setSaveError(null)
+      setSaving(false)
+      setTimeout(() => {
+        const firstKey = lines[0]?.key
+        if (firstKey) lineHandles.current.get(firstKey)?.focusQty()
+      }, 50)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
-  const variantsForSelected = selectedProduct ? variantsByProduct.get(selectedProduct.id!) ?? [] : []
-  const selectedVariant = variantsForSelected.find((v) => v.id === selectedVariantId) ?? null
+  function updateLine(key: string, patch: Partial<SaleLineState>) {
+    setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)))
+  }
+
+  function addLine() {
+    const lastCurrency = lines[lines.length - 1]?.currency ?? 'USD'
+    const newLine = blankLine(lastCurrency)
+    setLines((prev) => [...prev, newLine])
+    setTimeout(() => lineHandles.current.get(newLine.key)?.focusQty(), 50)
+  }
+
+  function removeLine(key: string) {
+    setLines((prev) => (prev.length > 1 ? prev.filter((l) => l.key !== key) : prev))
+    lineHandles.current.delete(key)
+  }
+
+  const grandTotal = useMemo(
+    () => formatCurrencyTotals(sumByCurrency(lines.map((l) => ({ currency: l.currency, amount: l.soldFor })))),
+    [lines],
+  )
+
+  async function submit() {
+    setSaveError(null)
+
+    // Read every line's live DOM values rather than trusting closed-over
+    // React state: if "Record Sale" is tapped in the same instant as the
+    // last keystroke on any line, the click can fire before that
+    // keystroke's state update has committed. Reading straight from each
+    // line's inputs makes this immune to that race regardless of typing
+    // or tapping speed.
+    const resolved = lines.map((line) => {
+      const live = lineHandles.current.get(line.key)?.getLiveValues() ?? {
+        name: '',
+        qty: 0,
+        soldFor: 0,
+        manualVariant: '',
+        manualCost: 0,
+      }
+      const name = line.selectedProduct ? line.selectedProduct.name : live.name.trim()
+      return { ...line, ...live, name }
+    })
+
+    for (const [i, line] of resolved.entries()) {
+      if (!line.name) {
+        setSaveError(`Item ${i + 1}: enter an item name, or pick one from the product search.`)
+        return
+      }
+      if (!Number.isFinite(line.qty) || line.qty <= 0) {
+        setSaveError(`Item ${i + 1}: quantity must be at least 1.`)
+        return
+      }
+      if (!Number.isFinite(line.soldFor) || line.soldFor < 0) {
+        setSaveError(`Item ${i + 1}: total can't be negative.`)
+        return
+      }
+    }
+
+    setSaving(true)
+    try {
+      await db.transaction('rw', db.sales, db.products, db.variants, db.settings, async () => {
+        const customerNumber = sameAsLast && lastSale ? lastSale.customerNumber : await reserveNextCustomerNumber()
+        const timestamp = Date.now()
+
+        for (const line of resolved) {
+          const selectedVariant = line.selectedProduct
+            ? (variantsByProduct.get(line.selectedProduct.id!) ?? []).find((v) => v.id === line.selectedVariantId) ?? null
+            : null
+          const costUnknown = selectedVariant ? selectedVariant.costUnknown : line.manualCost <= 0
+          const costTotal = selectedVariant ? selectedVariant.costPrice * line.qty : costUnknown ? 0 : line.manualCost
+
+          let productId = line.selectedProduct?.id
+          let variantId = selectedVariant?.id
+          let productCategory = line.selectedProduct?.category
+          let variantLabel: string | undefined = selectedVariant?.label
+
+          if (!line.selectedProduct) {
+            const existingProduct = await db.products.where('name').equalsIgnoreCase(line.name).first()
+            const now = Date.now()
+            if (existingProduct) {
+              productId = existingProduct.id
+              productCategory = existingProduct.category
+              const existingVariants = (await db.variants.where('productId').equals(existingProduct.id!).toArray()).sort(
+                (a, b) => a.order - b.order,
+              )
+              const label = line.manualVariant.trim() || (existingVariants.length === 0 ? 'Standard' : '')
+              const matching = label ? existingVariants.find((v) => v.label.toLowerCase() === label.toLowerCase()) : undefined
+              if (matching) {
+                variantId = matching.id
+                variantLabel = matching.label
+              } else if (existingVariants.length === 1 && !line.manualVariant.trim()) {
+                variantId = existingVariants[0].id
+                variantLabel = existingVariants[0].label
+              } else {
+                const newLabel = line.manualVariant.trim() || 'Standard'
+                variantId = await db.variants.add({
+                  productId: existingProduct.id!,
+                  label: newLabel,
+                  costPrice: costUnknown ? 0 : line.manualCost,
+                  costUnknown,
+                  sellPrice: line.qty > 0 ? line.soldFor / line.qty : line.soldFor,
+                  currency: line.currency,
+                  stockMyShop: 0,
+                  stockVishalShop: 0,
+                  lowStockThreshold: 3,
+                  order: existingVariants.length,
+                  createdAt: now,
+                  updatedAt: now,
+                })
+                variantLabel = newLabel
+              }
+            } else {
+              productId = (await db.products.add({ name: line.name, category: 'General', createdAt: now, updatedAt: now })) as number
+              productCategory = 'General'
+              variantLabel = line.manualVariant.trim() || 'Standard'
+              variantId = await db.variants.add({
+                productId,
+                label: variantLabel,
+                costPrice: costUnknown ? 0 : line.manualCost,
+                costUnknown,
+                sellPrice: line.qty > 0 ? line.soldFor / line.qty : line.soldFor,
+                currency: line.currency,
+                stockMyShop: 0,
+                stockVishalShop: 0,
+                lowStockThreshold: 3,
+                order: 0,
+                createdAt: now,
+                updatedAt: now,
+              })
+            }
+          }
+
+          await db.sales.add({
+            productId,
+            variantId,
+            itemName: line.name,
+            category: productCategory,
+            variant: variantLabel,
+            qty: line.qty,
+            unitType: line.unitType === 'Other' ? line.customUnit.trim() || undefined : line.unitType,
+            soldFor: line.soldFor,
+            costAtSale: costTotal,
+            currency: line.currency,
+            timestamp,
+            customerNumber,
+            tbs,
+            pickedUp: !tbs,
+          })
+
+          if (!tbs && variantId) {
+            const fresh = await db.variants.get(variantId)
+            if (fresh) {
+              await db.variants.update(variantId, {
+                stockMyShop: Math.max(0, fresh.stockMyShop - line.qty),
+                updatedAt: Date.now(),
+              })
+            }
+          }
+        }
+      })
+    } catch (err) {
+      console.error('Failed to record sale', err)
+      setSaving(false)
+      onError(err instanceof Error ? `Could not save this sale: ${err.message}` : 'Could not save this sale. Please try again.')
+      return
+    }
+
+    setSaving(false)
+    onSaved(`Recorded ${resolved.length} item${resolved.length === 1 ? '' : 's'} — ${grandTotal}`)
+    onClose()
+  }
+
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          {lastSale && (
+            <label className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+              <input type="checkbox" checked={sameAsLast} onChange={(e) => setSameAsLast(e.target.checked)} />
+              Same as #{lastSale.customerNumber}
+            </label>
+          )}
+        </div>
+        <Badge tone="good">#{previewNumber}</Badge>
+      </div>
+
+      <div className="flex flex-col gap-4">
+        {lines.map((line, idx) => (
+          <SaleLineItem
+            key={line.key}
+            ref={(handle) => {
+              if (handle) lineHandles.current.set(line.key, handle)
+              else lineHandles.current.delete(line.key)
+            }}
+            line={line}
+            index={idx}
+            canRemove={lines.length > 1}
+            onChange={(patch) => updateLine(line.key, patch)}
+            onRemove={() => removeLine(line.key)}
+            onEnterSubmit={submit}
+            products={products}
+            variantsByProduct={variantsByProduct}
+            productStock={productStock}
+            categories={categories}
+          />
+        ))}
+
+        <Button variant="secondary" onClick={addLine} className="self-start">
+          <PlusIcon className="h-4 w-4" />
+          Add more item
+        </Button>
+
+        <Switch checked={tbs} onChange={setTbs} label="TBS — customer paid, will pick up goods later" />
+      </div>
+
+      {saveError && (
+        <div className="mt-3 rounded-lg bg-[var(--status-critical)]/10 px-3 py-2 text-sm text-[var(--status-critical)]">
+          {saveError}
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-col gap-2 border-t border-[var(--gridline)] pt-3">
+        <div className="flex items-center justify-between">
+          <span className="text-base font-semibold">Grand Total</span>
+          <span className="tabular text-lg font-bold">{grandTotal}</span>
+        </div>
+        <Button onClick={submit} disabled={saving} className="w-full justify-center">
+          {saving ? 'Saving…' : 'Record Sale'}
+        </Button>
+      </div>
+    </BottomSheet>
+  )
+}
+
+const SaleLineItem = forwardRef<
+  LineHandle,
+  {
+    line: SaleLineState
+    index: number
+    canRemove: boolean
+    onChange: (patch: Partial<SaleLineState>) => void
+    onRemove: () => void
+    onEnterSubmit: () => void
+    products: Product[] | undefined
+    variantsByProduct: Map<number, Variant[]>
+    productStock: Map<number, number>
+    categories: Category[] | undefined
+  }
+>(function SaleLineItem(
+  { line, index, canRemove, onChange, onRemove, onEnterSubmit, products, variantsByProduct, productStock, categories },
+  ref,
+) {
+  const qtyRef = useRef<HTMLInputElement>(null)
+  const customUnitRef = useRef<HTMLInputElement>(null)
+  const itemInputRef = useRef<HTMLInputElement>(null)
+  const manualVariantRef = useRef<HTMLInputElement>(null)
+  const manualCostRef = useRef<HTMLInputElement>(null)
+  const soldForRef = useRef<HTMLInputElement>(null)
+  const unitChipRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const variantChipRefs = useRef<Record<number, HTMLButtonElement | null>>({})
+
+  useImperativeHandle(ref, () => ({
+    getLiveValues() {
+      return {
+        name: itemInputRef.current?.value ?? '',
+        qty: qtyRef.current ? Number(qtyRef.current.value) || 0 : 0,
+        soldFor: soldForRef.current ? Number(soldForRef.current.value) || 0 : 0,
+        manualVariant: manualVariantRef.current?.value ?? '',
+        manualCost: manualCostRef.current ? Number(manualCostRef.current.value) || 0 : 0,
+      }
+    },
+    focusQty() {
+      qtyRef.current?.focus()
+      qtyRef.current?.select()
+    },
+  }))
+
+  const filteredProducts = useMemo(() => {
+    if (!line.query.trim()) return (products ?? []).slice(0, 8)
+    const q = line.query.toLowerCase()
+    return (products ?? []).filter((p) => p.name.toLowerCase().includes(q)).slice(0, 8)
+  }, [products, line.query])
+
+  const variantsForSelected = line.selectedProduct ? variantsByProduct.get(line.selectedProduct.id!) ?? [] : []
+  const selectedVariant = variantsForSelected.find((v) => v.id === line.selectedVariantId) ?? null
 
   const categoryAllowedUnits = useMemo(() => {
-    const categoryName = selectedProduct?.category ?? 'General'
+    const categoryName = line.selectedProduct?.category ?? 'General'
     const cat = (categories ?? []).find((c) => c.name === categoryName)
     return cat?.allowedUnits && cat.allowedUnits.length > 0 ? cat.allowedUnits : null
-  }, [categories, selectedProduct])
+  }, [categories, line.selectedProduct])
 
   const availableUnits = useMemo(() => {
     if (!categoryAllowedUnits) return UNIT_TYPES
@@ -104,73 +443,41 @@ export function RecordSaleSheet({
   }, [categoryAllowedUnits])
 
   useEffect(() => {
-    if (!availableUnits.includes(unitType)) setUnitType(availableUnits[0])
-  }, [availableUnits, unitType])
-
-  // Reset the whole sheet each time it's opened fresh.
-  useEffect(() => {
-    if (open) {
-      setQuery('')
-      setSelectedProduct(null)
-      setSelectedVariantId(null)
-      setQty(1)
-      setUnitType('Piece')
-      setCustomUnit('')
-      setSoldFor(0)
-      setManualVariant('')
-      setManualCost(0)
-      setCostUnknown(true)
-      setTbs(false)
-      setMoreOpen(false)
-      setSaveError(null)
-      setSaving(false)
-      setTimeout(() => {
-        qtyRef.current?.focus()
-        qtyRef.current?.select()
-      }, 50)
-    }
-  }, [open])
+    if (!availableUnits.includes(line.unitType)) onChange({ unitType: availableUnits[0] })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableUnits])
 
   function pickProduct(product: Product) {
-    setSelectedProduct(product)
-    setQuery(product.name)
     const variants = variantsByProduct.get(product.id!) ?? []
+    const patch: Partial<SaleLineState> = { selectedProduct: product, query: product.name }
     if (variants.length >= 1) {
       const first = variants[0]
-      setSelectedVariantId(first.id!)
-      setCurrency(first.currency)
-      setSoldFor(first.sellPrice * qty)
+      patch.selectedVariantId = first.id!
+      patch.currency = first.currency
+      patch.soldFor = first.sellPrice * line.qty
     } else {
-      setSelectedVariantId(null)
+      patch.selectedVariantId = null
     }
+    onChange(patch)
     setTimeout(() => {
-      if (variants.length > 1) {
-        variantChipRefs.current[variants[0].id!]?.focus()
-      } else {
-        soldForRef.current?.focus()
-      }
+      if (variants.length > 1) variantChipRefs.current[variants[0].id!]?.focus()
+      else soldForRef.current?.focus()
     }, 0)
   }
 
   function pickVariant(variant: Variant) {
-    setSelectedVariantId(variant.id!)
-    setCurrency(variant.currency)
-    setSoldFor(variant.sellPrice * qty)
+    onChange({ selectedVariantId: variant.id!, currency: variant.currency, soldFor: variant.sellPrice * line.qty })
     soldForRef.current?.focus()
   }
 
   function changeQty(next: number) {
-    setQty(next)
-    if (selectedVariant) setSoldFor(selectedVariant.sellPrice * next)
+    onChange({ qty: next, soldFor: selectedVariant ? selectedVariant.sellPrice * next : line.soldFor })
   }
 
   function chooseUnit(u: string) {
-    setUnitType(u)
-    if (u === 'Other') {
-      setTimeout(() => customUnitRef.current?.focus(), 0)
-    } else {
-      setTimeout(() => itemInputRef.current?.focus(), 0)
-    }
+    onChange({ unitType: u })
+    if (u === 'Other') setTimeout(() => customUnitRef.current?.focus(), 0)
+    else setTimeout(() => itemInputRef.current?.focus(), 0)
   }
 
   function onEnterAdvance(next: () => void) {
@@ -183,366 +490,187 @@ export function RecordSaleSheet({
   }
 
   function afterItemAdvance() {
-    if (selectedProduct && variantsForSelected.length > 1) {
-      const first = variantsForSelected[0]
-      variantChipRefs.current[first.id!]?.focus()
-    } else if (!selectedProduct) {
+    if (line.selectedProduct && variantsForSelected.length > 1) {
+      variantChipRefs.current[variantsForSelected[0].id!]?.focus()
+    } else if (!line.selectedProduct) {
       manualVariantRef.current?.focus()
     } else {
       soldForRef.current?.focus()
     }
   }
 
-  // Live preview only — informational, driven by React state so it updates
-  // as you type. The actual save in submit() re-reads the DOM directly, so
-  // this preview lagging by a keystroke (if ever) has no effect on what
-  // gets recorded.
-  const previewCostTotal = selectedVariant ? selectedVariant.costPrice * qty : costUnknown ? 0 : manualCost
-  const previewProfit = soldFor - previewCostTotal
-
-  async function submit() {
-    setSaveError(null)
-
-    // Read the live DOM values rather than trusting the closed-over React
-    // state: if "Record sale" is tapped in the same instant as the last
-    // keystroke, the click can fire before that keystroke's state update
-    // has committed, which would otherwise silently save a stale (often
-    // zero) value. Reading straight from the inputs makes this immune to
-    // that race regardless of how fast the user types and taps.
-    const qty = qtyRef.current ? Number(qtyRef.current.value) || 0 : 0
-    const soldFor = soldForRef.current ? Number(soldForRef.current.value) || 0 : 0
-    const manualName = itemInputRef.current?.value ?? ''
-    const manualVariant = manualVariantRef.current?.value ?? ''
-    const manualCost = manualCostRef.current ? Number(manualCostRef.current.value) || 0 : 0
-    const costTotal = selectedVariant ? selectedVariant.costPrice * qty : costUnknown ? 0 : manualCost
-
-    const name = selectedProduct ? selectedProduct.name : manualName.trim()
-    if (!name) {
-      setSaveError('Enter an item name, or pick one from the product search.')
-      return
-    }
-    if (!Number.isFinite(qty) || qty <= 0) {
-      setSaveError('Quantity must be at least 1.')
-      return
-    }
-    if (!Number.isFinite(soldFor) || soldFor < 0) {
-      setSaveError("Sold for can't be negative.")
-      return
-    }
-
-    setSaving(true)
-    try {
-      await db.transaction('rw', db.sales, db.products, db.variants, db.settings, async () => {
-        const customerNumber = sameAsLast && lastSale ? lastSale.customerNumber : await reserveNextCustomerNumber()
-
-        let productId = selectedProduct?.id
-        let variantId = selectedVariant?.id
-        let productCategory = selectedProduct?.category
-        let variantLabel: string | undefined = selectedVariant?.label
-
-        if (!selectedProduct) {
-          const existingProduct = await db.products.where('name').equalsIgnoreCase(name).first()
-          const now = Date.now()
-          if (existingProduct) {
-            productId = existingProduct.id
-            productCategory = existingProduct.category
-            const existingVariants = (await db.variants.where('productId').equals(existingProduct.id!).toArray()).sort(
-              (a, b) => a.order - b.order,
-            )
-            const label = manualVariant.trim() || (existingVariants.length === 0 ? 'Standard' : '')
-            const matching = label ? existingVariants.find((v) => v.label.toLowerCase() === label.toLowerCase()) : undefined
-            if (matching) {
-              variantId = matching.id
-              variantLabel = matching.label
-            } else if (existingVariants.length === 1 && !manualVariant.trim()) {
-              variantId = existingVariants[0].id
-              variantLabel = existingVariants[0].label
-            } else {
-              const newLabel = manualVariant.trim() || 'Standard'
-              variantId = await db.variants.add({
-                productId: existingProduct.id!,
-                label: newLabel,
-                costPrice: costUnknown ? 0 : manualCost,
-                costUnknown,
-                sellPrice: qty > 0 ? soldFor / qty : soldFor,
-                currency,
-                stockMyShop: 0,
-                stockVishalShop: 0,
-                lowStockThreshold: 3,
-                order: existingVariants.length,
-                createdAt: now,
-                updatedAt: now,
-              })
-              variantLabel = newLabel
-            }
-          } else {
-            productId = (await db.products.add({ name, category: 'General', createdAt: now, updatedAt: now })) as number
-            productCategory = 'General'
-            variantLabel = manualVariant.trim() || 'Standard'
-            variantId = await db.variants.add({
-              productId,
-              label: variantLabel,
-              costPrice: costUnknown ? 0 : manualCost,
-              costUnknown,
-              sellPrice: qty > 0 ? soldFor / qty : soldFor,
-              currency,
-              stockMyShop: 0,
-              stockVishalShop: 0,
-              lowStockThreshold: 3,
-              order: 0,
-              createdAt: now,
-              updatedAt: now,
-            })
-          }
-        }
-
-        await db.sales.add({
-          productId,
-          variantId,
-          itemName: name,
-          category: productCategory,
-          variant: variantLabel,
-          qty,
-          unitType: unitType === 'Other' ? customUnit.trim() || undefined : unitType,
-          soldFor,
-          costAtSale: costTotal,
-          currency,
-          timestamp: Date.now(),
-          customerNumber,
-          tbs,
-          pickedUp: !tbs,
-        })
-
-        if (!tbs && variantId) {
-          const fresh = await db.variants.get(variantId)
-          if (fresh) {
-            await db.variants.update(variantId, {
-              stockMyShop: Math.max(0, fresh.stockMyShop - qty),
-              updatedAt: Date.now(),
-            })
-          }
-        }
-      })
-    } catch (err) {
-      console.error('Failed to record sale', err)
-      setSaving(false)
-      onError(err instanceof Error ? `Could not save this sale: ${err.message}` : 'Could not save this sale. Please try again.')
-      return
-    }
-
-    setSaving(false)
-    onSaved(`Recorded ${qty} × ${name} — ${money(soldFor, currency)}`)
-    onClose()
-  }
+  const unitPrice = line.qty > 1 ? line.soldFor / line.qty : null
 
   return (
-    <BottomSheet open={open} onClose={onClose}>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <Pill
-          options={[{ label: 'USD', value: 'USD' }, { label: 'LRD', value: 'LRD' }]}
-          value={currency}
-          onChange={(v) => !selectedVariant && setCurrency(v)}
-          className={selectedVariant ? 'opacity-50' : ''}
-        />
-        <div className="flex items-center gap-2">
-          {lastSale && (
-            <label className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
-              <input type="checkbox" checked={sameAsLast} onChange={(e) => setSameAsLast(e.target.checked)} />
-              Same as #{lastSale.customerNumber}
-            </label>
-          )}
-          <Badge tone="good">#{previewNumber}</Badge>
-        </div>
+    <div className="flex flex-col gap-3 rounded-xl border border-[var(--border)] p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-[var(--text-muted)]">Item {index + 1}</span>
+        {canRemove && (
+          <button onClick={onRemove} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Remove item">
+            <TrashIcon className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
-      <div className="flex flex-col gap-3">
-        <Field label="Quantity">
+      <Pill
+        options={[{ label: 'USD', value: 'USD' }, { label: 'LRD', value: 'LRD' }]}
+        value={line.currency}
+        onChange={(v) => !selectedVariant && onChange({ currency: v })}
+        className={selectedVariant ? 'opacity-50' : ''}
+      />
+
+      <Field label="Quantity">
+        <input
+          ref={qtyRef}
+          type="number"
+          inputMode="numeric"
+          min={1}
+          className={inputClass}
+          value={line.qty}
+          onFocus={selectOnFocus}
+          onChange={(e) => changeQty(Number(e.target.value) || 1)}
+          onKeyDown={onEnterAdvance(() => unitChipRefs.current[line.unitType]?.focus())}
+          enterKeyHint="next"
+        />
+      </Field>
+
+      <Field label="Unit">
+        <div className="grid grid-cols-3 gap-1.5">
+          {availableUnits.map((u) => (
+            <button
+              key={u}
+              type="button"
+              ref={(el) => { unitChipRefs.current[u] = el }}
+              onClick={() => chooseUnit(u)}
+              onKeyDown={onEnterAdvance(() => chooseUnit(u))}
+              className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
+                line.unitType === u
+                  ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
+                  : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
+              }`}
+            >
+              {u}
+            </button>
+          ))}
+        </div>
+        {line.unitType === 'Other' && (
           <input
-            ref={qtyRef}
-            type="number"
-            inputMode="numeric"
-            min={1}
-            className={inputClass}
-            value={qty}
-            onFocus={selectOnFocus}
-            onChange={(e) => changeQty(Number(e.target.value) || 1)}
-            onKeyDown={onEnterAdvance(() => unitChipRefs.current[unitType]?.focus())}
+            ref={customUnitRef}
+            className={inputClass + ' mt-1.5'}
+            placeholder="Custom unit"
+            value={line.customUnit}
+            onChange={(e) => onChange({ customUnit: e.target.value })}
+            onKeyDown={onEnterAdvance(() => itemInputRef.current?.focus())}
             enterKeyHint="next"
           />
-        </Field>
+        )}
+      </Field>
 
-        <Field label="Unit">
-          <div className="grid grid-cols-3 gap-1.5">
-            {availableUnits.map((u) => (
+      <Field label="Item">
+        <div className="relative flex items-center gap-2">
+          {line.selectedProduct && <ItemThumb image={line.selectedProduct.image} size={36} />}
+          <div className="relative flex-1">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+            <input
+              ref={itemInputRef}
+              className={inputClass + ' pl-9'}
+              placeholder="Search products or type a new item name"
+              value={line.query}
+              onChange={(e) => onChange({ query: e.target.value, selectedProduct: null, selectedVariantId: null })}
+              onKeyDown={onEnterAdvance(afterItemAdvance)}
+              enterKeyHint="next"
+            />
+            {line.query && !line.selectedProduct && filteredProducts.length > 0 && (
+              <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
+                {filteredProducts.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => pickProduct(p)}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-[var(--page-plane)]"
+                  >
+                    <ItemThumb image={p.image} size={28} />
+                    <span className="flex-1">{p.name}</span>
+                    <span className="tabular text-xs text-[var(--text-muted)]">{productStock.get(p.id!) ?? 0} in stock</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        {!line.selectedProduct && line.query && (
+          <span className="text-xs text-[var(--text-muted)]">Not in inventory — will be added as a new item.</span>
+        )}
+      </Field>
+
+      {line.selectedProduct && variantsForSelected.length > 1 && (
+        <Field label="Variant">
+          <div className="flex flex-wrap gap-1.5">
+            {variantsForSelected.map((v) => (
               <button
-                key={u}
+                key={v.id}
                 type="button"
-                ref={(el) => { unitChipRefs.current[u] = el }}
-                onClick={() => chooseUnit(u)}
-                onKeyDown={onEnterAdvance(() => chooseUnit(u))}
-                className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
-                  unitType === u
+                ref={(el) => { variantChipRefs.current[v.id!] = el }}
+                onClick={() => pickVariant(v)}
+                onKeyDown={onEnterAdvance(() => pickVariant(v))}
+                className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  line.selectedVariantId === v.id
                     ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
                     : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
                 }`}
               >
-                {u}
+                {v.label} · {money(v.sellPrice, v.currency)}
               </button>
             ))}
           </div>
-          {unitType === 'Other' && (
-            <input
-              ref={customUnitRef}
-              className={inputClass + ' mt-1.5'}
-              placeholder="Custom unit"
-              value={customUnit}
-              onChange={(e) => setCustomUnit(e.target.value)}
-              onKeyDown={onEnterAdvance(() => itemInputRef.current?.focus())}
-              enterKeyHint="next"
-            />
-          )}
         </Field>
+      )}
 
-        <Field label="Item">
-          <div className="relative flex items-center gap-2">
-            {selectedProduct && <ItemThumb image={selectedProduct.image} size={36} />}
-            <div className="relative flex-1">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-              <input
-                ref={itemInputRef}
-                className={inputClass + ' pl-9'}
-                placeholder="Search products or type a new item name"
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value)
-                  setSelectedProduct(null)
-                  setSelectedVariantId(null)
-                }}
-                onKeyDown={onEnterAdvance(afterItemAdvance)}
-                enterKeyHint="next"
-              />
-              {query && !selectedProduct && filteredProducts.length > 0 && (
-                <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
-                  {filteredProducts.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => pickProduct(p)}
-                      className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-[var(--page-plane)]"
-                    >
-                      <ItemThumb image={p.image} size={28} />
-                      <span className="flex-1">{p.name}</span>
-                      <span className="tabular text-xs text-[var(--text-muted)]">{productStock.get(p.id!) ?? 0} in stock</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-          {!selectedProduct && query && (
-            <span className="text-xs text-[var(--text-muted)]">Not in inventory — will be added as a new item.</span>
-          )}
-        </Field>
-
-        {selectedProduct && variantsForSelected.length > 1 && (
-          <Field label="Variant">
-            <div className="flex flex-wrap gap-1.5">
-              {variantsForSelected.map((v) => (
-                <button
-                  key={v.id}
-                  type="button"
-                  ref={(el) => { variantChipRefs.current[v.id!] = el }}
-                  onClick={() => pickVariant(v)}
-                  onKeyDown={onEnterAdvance(() => pickVariant(v))}
-                  className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                    selectedVariantId === v.id
-                      ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
-                      : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
-                  }`}
-                >
-                  {v.label} · {money(v.sellPrice, v.currency)}
-                </button>
-              ))}
-            </div>
-          </Field>
-        )}
-
-        {!selectedProduct && (
+      {!line.selectedProduct && (
+        <>
           <Field label="Variant / size (optional)">
             <input
               ref={manualVariantRef}
               className={inputClass}
               placeholder={'e.g. Blue, 4" or 3"'}
-              value={manualVariant}
-              onChange={(e) => setManualVariant(e.target.value)}
+              value={line.manualVariant}
+              onChange={(e) => onChange({ manualVariant: e.target.value })}
               onKeyDown={onEnterAdvance(() => soldForRef.current?.focus())}
               enterKeyHint="next"
             />
           </Field>
-        )}
-
-        <Field label="Sold for (total)">
-          <input
-            ref={soldForRef}
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="0.01"
-            className={inputClass}
-            value={soldFor}
-            onFocus={selectOnFocus}
-            onChange={(e) => setSoldFor(Number(e.target.value) || 0)}
-            onKeyDown={onEnterAdvance(() => submit())}
-            enterKeyHint="done"
-          />
-        </Field>
-
-        <button
-          type="button"
-          onClick={() => setMoreOpen((v) => !v)}
-          className="self-start text-xs font-medium text-[var(--series-1)]"
-        >
-          {moreOpen ? '▾ Hide options' : '▸ More options (cost, TBS)'}
-        </button>
-
-        {moreOpen && (
-          <div className="flex flex-col gap-3 rounded-lg bg-[var(--page-plane)] p-2.5">
-            {!selectedVariant && (
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <Switch checked={costUnknown} onChange={setCostUnknown} label="I don't know the cost yet" />
-                {!costUnknown && (
-                  <input
-                    ref={manualCostRef}
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    placeholder="Cost (total)"
-                    className={inputClass + ' w-36'}
-                    value={manualCost}
-                    onFocus={selectOnFocus}
-                    onChange={(e) => setManualCost(Number(e.target.value) || 0)}
-                  />
-                )}
-              </div>
-            )}
-            <Switch checked={tbs} onChange={setTbs} label="TBS — customer paid, will pick up goods later" />
-          </div>
-        )}
-      </div>
-
-      {saveError && (
-        <div className="mt-3 rounded-lg bg-[var(--status-critical)]/10 px-3 py-2 text-sm text-[var(--status-critical)]">
-          {saveError}
-        </div>
+          <Field label="Crossed Cost Price (optional)">
+            <input
+              ref={manualCostRef}
+              type="number"
+              min={0}
+              step="0.01"
+              className={inputClass}
+              value={line.manualCost}
+              onFocus={selectOnFocus}
+              onChange={(e) => onChange({ manualCost: Number(e.target.value) || 0 })}
+            />
+          </Field>
+        </>
       )}
 
-      <div className="mt-4 flex items-center justify-between border-t border-[var(--gridline)] pt-3">
-        <div className="text-sm text-[var(--text-secondary)]">
-          Profit preview: <span className="tabular font-semibold text-[var(--status-good)]">{money(previewProfit, currency)}</span>
-        </div>
-        <Button onClick={submit} disabled={saving}>
-          {saving ? 'Saving…' : 'Record sale'}
-        </Button>
-      </div>
-    </BottomSheet>
+      <Field label="Total">
+        <input
+          ref={soldForRef}
+          type="number"
+          inputMode="decimal"
+          min={0}
+          step="0.01"
+          className={inputClass}
+          value={line.soldFor}
+          onFocus={selectOnFocus}
+          onChange={(e) => onChange({ soldFor: Number(e.target.value) || 0 })}
+          onKeyDown={onEnterAdvance(onEnterSubmit)}
+          enterKeyHint="done"
+        />
+        {unitPrice != null && (
+          <span className="text-xs text-[var(--text-muted)]">Unit Price: {money(unitPrice, line.currency)}</span>
+        )}
+      </Field>
+    </div>
   )
-}
+})
