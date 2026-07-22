@@ -1,0 +1,217 @@
+import { useMemo, useState } from 'react'
+import { useLiveQuery } from 'dexie-react-hooks'
+import { db, DEFAULT_CATEGORIES, type Currency, type Item } from '../db'
+import { Card, Button, Modal, Field, inputClass, Badge } from '../components/ui'
+import { PlusIcon, SearchIcon, EditIcon, TrashIcon } from '../components/icons'
+import { money, isLowStock } from '../lib/format'
+
+const emptyForm = {
+  name: '',
+  category: DEFAULT_CATEGORIES[0],
+  variant: '',
+  sku: '',
+  costPrice: 0,
+  sellPrice: 0,
+  currency: 'USD' as Currency,
+  stock: 0,
+  lowStockThreshold: 3,
+}
+
+export default function Inventory() {
+  const items = useLiveQuery(() => db.items.orderBy('name').toArray(), [])
+  const categories = useLiveQuery(() => db.categories.toArray(), [])
+  const [query, setQuery] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState<string>('All')
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState<Item | null>(null)
+  const [form, setForm] = useState(emptyForm)
+
+  const allCategories = useMemo(() => {
+    const fromItems = new Set((items ?? []).map((i) => i.category))
+    const fromDb = new Set((categories ?? []).map((c) => c.name))
+    return Array.from(new Set([...DEFAULT_CATEGORIES, ...fromDb, ...fromItems])).sort()
+  }, [items, categories])
+
+  const filtered = useMemo(() => {
+    let list = items ?? []
+    if (categoryFilter !== 'All') list = list.filter((i) => i.category === categoryFilter)
+    if (query.trim()) {
+      const q = query.toLowerCase()
+      list = list.filter(
+        (i) => i.name.toLowerCase().includes(q) || i.sku?.toLowerCase().includes(q) || i.variant.toLowerCase().includes(q),
+      )
+    }
+    return list
+  }, [items, query, categoryFilter])
+
+  function openAdd() {
+    setEditing(null)
+    setForm(emptyForm)
+    setModalOpen(true)
+  }
+
+  function openEdit(item: Item) {
+    setEditing(item)
+    setForm({
+      name: item.name,
+      category: item.category,
+      variant: item.variant,
+      sku: item.sku ?? '',
+      costPrice: item.costPrice,
+      sellPrice: item.sellPrice,
+      currency: item.currency,
+      stock: item.stock,
+      lowStockThreshold: item.lowStockThreshold,
+    })
+    setModalOpen(true)
+  }
+
+  async function save() {
+    if (!form.name.trim()) return
+    const now = Date.now()
+    if (editing?.id) {
+      await db.items.update(editing.id, { ...form, updatedAt: now })
+    } else {
+      await db.items.add({ ...form, createdAt: now, updatedAt: now })
+    }
+    setModalOpen(false)
+  }
+
+  async function remove(id: number) {
+    await db.items.delete(id)
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">Inventory Manager</h1>
+          <p className="text-sm text-[var(--text-secondary)]">{items?.length ?? 0} SKUs tracked so far</p>
+        </div>
+        <Button onClick={openAdd}>
+          <PlusIcon className="h-4 w-4" />
+          Add item
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[220px] flex-1">
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+          <input
+            className={inputClass + ' pl-9'}
+            placeholder="Search by name, variant, or SKU"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <select className={inputClass + ' w-auto'} value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+          <option value="All">All categories</option>
+          {allCategories.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+      </div>
+
+      <Card>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="text-xs text-[var(--text-muted)]">
+                <th className="pb-2 font-medium">Item</th>
+                <th className="pb-2 font-medium">Category</th>
+                <th className="pb-2 font-medium">Variant</th>
+                <th className="pb-2 font-medium">Stock</th>
+                <th className="pb-2 font-medium">Cost</th>
+                <th className="pb-2 font-medium">Sell</th>
+                <th className="pb-2 font-medium"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((item) => {
+                const low = isLowStock(item.stock, item.lowStockThreshold)
+                return (
+                  <tr key={item.id} className="border-t border-[var(--gridline)]">
+                    <td className="py-2 pr-2 font-medium">{item.name}{item.sku && <span className="ml-1 text-xs text-[var(--text-muted)]">#{item.sku}</span>}</td>
+                    <td className="py-2 pr-2 text-[var(--text-secondary)]">{item.category}</td>
+                    <td className="py-2 pr-2 text-[var(--text-secondary)]">{item.variant || '—'}</td>
+                    <td className="py-2 pr-2">
+                      <span className="tabular">{item.stock}</span>
+                      {low && <Badge tone="critical">Low</Badge>}
+                    </td>
+                    <td className="tabular py-2 pr-2 text-[var(--text-muted)]">{money(item.costPrice, item.currency)}</td>
+                    <td className="tabular py-2 pr-2">{money(item.sellPrice, item.currency)}</td>
+                    <td className="py-2 text-right">
+                      <div className="flex justify-end gap-2">
+                        <button onClick={() => openEdit(item)} className="text-[var(--text-muted)] hover:text-[var(--series-1)]" aria-label="Edit">
+                          <EditIcon className="h-4 w-4" />
+                        </button>
+                        <button onClick={() => item.id && remove(item.id)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Delete">
+                          <TrashIcon className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-sm text-[var(--text-muted)]">
+                    No items yet. Add them as you go — you don't need it all at once.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit item' : 'Add item'}>
+        <div className="flex flex-col gap-3">
+          <Field label="Name">
+            <input className={inputClass} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Category">
+              <input list="category-list" className={inputClass} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
+              <datalist id="category-list">
+                {allCategories.map((c) => <option key={c} value={c} />)}
+              </datalist>
+            </Field>
+            <Field label="Variant (size/color/pack)">
+              <input className={inputClass} value={form.variant} onChange={(e) => setForm({ ...form, variant: e.target.value })} />
+            </Field>
+          </div>
+          <Field label="SKU / barcode (optional)">
+            <input className={inputClass} value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} />
+          </Field>
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Cost price">
+              <input type="number" min={0} step="0.01" className={inputClass} value={form.costPrice} onChange={(e) => setForm({ ...form, costPrice: Number(e.target.value) || 0 })} />
+            </Field>
+            <Field label="Sell price">
+              <input type="number" min={0} step="0.01" className={inputClass} value={form.sellPrice} onChange={(e) => setForm({ ...form, sellPrice: Number(e.target.value) || 0 })} />
+            </Field>
+            <Field label="Currency">
+              <select className={inputClass} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value as Currency })}>
+                <option value="USD">USD</option>
+                <option value="LRD">LRD</option>
+              </select>
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Stock on hand">
+              <input type="number" min={0} className={inputClass} value={form.stock} onChange={(e) => setForm({ ...form, stock: Number(e.target.value) || 0 })} />
+            </Field>
+            <Field label="Low stock alert below">
+              <input type="number" min={0} className={inputClass} value={form.lowStockThreshold} onChange={(e) => setForm({ ...form, lowStockThreshold: Number(e.target.value) || 0 })} />
+            </Field>
+          </div>
+          <div className="mt-2 flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button onClick={save}>{editing ? 'Save changes' : 'Add item'}</Button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  )
+}
