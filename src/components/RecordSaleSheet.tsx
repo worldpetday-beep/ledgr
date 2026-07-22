@@ -77,7 +77,7 @@ export function RecordSaleSheet({
   const productStock = useMemo(() => {
     const map = new Map<number, number>()
     for (const [productId, list] of variantsByProduct.entries()) {
-      map.set(productId, list.reduce((sum, v) => sum + v.stock, 0))
+      map.set(productId, list.reduce((sum, v) => sum + v.stockMyShop, 0))
     }
     return map
   }, [variantsByProduct])
@@ -193,6 +193,13 @@ export function RecordSaleSheet({
     }
   }
 
+  // Live preview only — informational, driven by React state so it updates
+  // as you type. The actual save in submit() re-reads the DOM directly, so
+  // this preview lagging by a keystroke (if ever) has no effect on what
+  // gets recorded.
+  const previewCostTotal = selectedVariant ? selectedVariant.costPrice * qty : costUnknown ? 0 : manualCost
+  const previewProfit = soldFor - previewCostTotal
+
   async function submit() {
     setSaveError(null)
 
@@ -259,7 +266,8 @@ export function RecordSaleSheet({
                 costUnknown,
                 sellPrice: qty > 0 ? soldFor / qty : soldFor,
                 currency,
-                stock: 0,
+                stockMyShop: 0,
+                stockVishalShop: 0,
                 lowStockThreshold: 3,
                 order: existingVariants.length,
                 createdAt: now,
@@ -278,7 +286,8 @@ export function RecordSaleSheet({
               costUnknown,
               sellPrice: qty > 0 ? soldFor / qty : soldFor,
               currency,
-              stock: 0,
+              stockMyShop: 0,
+              stockVishalShop: 0,
               lowStockThreshold: 3,
               order: 0,
               createdAt: now,
@@ -308,7 +317,7 @@ export function RecordSaleSheet({
           const fresh = await db.variants.get(variantId)
           if (fresh) {
             await db.variants.update(variantId, {
-              stock: Math.max(0, fresh.stock - qty),
+              stockMyShop: Math.max(0, fresh.stockMyShop - qty),
               updatedAt: Date.now(),
             })
           }
@@ -526,7 +535,10 @@ export function RecordSaleSheet({
         </div>
       )}
 
-      <div className="mt-4 flex items-center justify-end border-t border-[var(--gridline)] pt-3">
+      <div className="mt-4 flex items-center justify-between border-t border-[var(--gridline)] pt-3">
+        <div className="text-sm text-[var(--text-secondary)]">
+          Profit preview: <span className="tabular font-semibold text-[var(--status-good)]">{money(previewProfit, currency)}</span>
+        </div>
         <Button onClick={submit} disabled={saving}>
           {saving ? 'Saving…' : 'Record sale'}
         </Button>

@@ -34,13 +34,14 @@ export default function Settings() {
   }
 
   async function exportBackup() {
-    const [products, variants, sales, cats] = await Promise.all([
+    const [products, variants, sales, cats, transfers] = await Promise.all([
       db.products.toArray(),
       db.variants.toArray(),
       db.sales.toArray(),
       db.categories.toArray(),
+      db.stockTransfers.toArray(),
     ])
-    const payload = { exportedAt: new Date().toISOString(), products, variants, sales, categories: cats }
+    const payload = { exportedAt: new Date().toISOString(), products, variants, sales, categories: cats, stockTransfers: transfers }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -55,7 +56,7 @@ export default function Settings() {
     try {
       const text = await file.text()
       const data = JSON.parse(text)
-      await db.transaction('rw', db.products, db.variants, db.sales, db.categories, async () => {
+      await db.transaction('rw', db.products, db.variants, db.sales, db.categories, db.stockTransfers, async () => {
         const productIdMap = new Map<number, number>()
         if (Array.isArray(data.products)) {
           for (const product of data.products) {
@@ -87,6 +88,16 @@ export default function Settings() {
           for (const cat of data.categories) {
             const exists = await db.categories.where('name').equalsIgnoreCase(cat.name).first()
             if (!exists) await db.categories.add({ name: cat.name, allowedUnits: cat.allowedUnits })
+          }
+        }
+        if (Array.isArray(data.stockTransfers)) {
+          for (const transfer of data.stockTransfers) {
+            const { id, productId, variantId, ...rest } = transfer
+            await db.stockTransfers.add({
+              ...rest,
+              productId: productId != null ? productIdMap.get(productId) ?? productId : productId,
+              variantId: variantId != null ? variantIdMap.get(variantId) ?? variantId : variantId,
+            })
           }
         }
       })

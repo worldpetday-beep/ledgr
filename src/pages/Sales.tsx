@@ -39,7 +39,7 @@ export default function Sales() {
       const stockWasDeducted = !sale.tbs || sale.pickedUp
       if (stockWasDeducted && sale.variantId) {
         const variant = await db.variants.get(sale.variantId)
-        if (variant) await db.variants.update(sale.variantId, { stock: variant.stock + sale.qty, updatedAt: Date.now() })
+        if (variant) await db.variants.update(sale.variantId, { stockMyShop: variant.stockMyShop + sale.qty, updatedAt: Date.now() })
       }
     })
   }
@@ -49,7 +49,7 @@ export default function Sales() {
       await db.sales.update(sale.id!, { pickedUp: true })
       if (sale.variantId) {
         const variant = await db.variants.get(sale.variantId)
-        if (variant) await db.variants.update(sale.variantId, { stock: Math.max(0, variant.stock - sale.qty), updatedAt: Date.now() })
+        if (variant) await db.variants.update(sale.variantId, { stockMyShop: Math.max(0, variant.stockMyShop - sale.qty), updatedAt: Date.now() })
       }
     })
   }

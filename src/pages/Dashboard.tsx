@@ -32,7 +32,7 @@ export default function Dashboard() {
   const lowStockVariants = useMemo(() => {
     const productMap = new Map((products ?? []).map((p) => [p.id, p]))
     return (variants ?? [])
-      .filter((v) => isLowStock(v.stock, v.lowStockThreshold))
+      .filter((v) => isLowStock(v.stockMyShop, v.lowStockThreshold))
       .map((v) => ({ ...v, productName: productMap.get(v.productId)?.name ?? 'Unknown item' }))
   }, [variants, products])
 
@@ -155,7 +155,7 @@ export default function Dashboard() {
                       {v.label && v.label !== 'Standard' ? ` — ${v.label}` : ''}
                     </span>
                   </span>
-                  <span className="tabular shrink-0 text-[var(--status-critical)]">{v.stock} left</span>
+                  <span className="tabular shrink-0 text-[var(--status-critical)]">{v.stockMyShop} left</span>
                 </li>
               ))}
             </ul>

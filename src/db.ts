@@ -22,11 +22,25 @@ export interface Variant {
   costUnknown: boolean // true when cost hasn't been entered yet (quick sale of a walk-in item)
   sellPrice: number
   currency: Currency
-  stock: number
+  stockMyShop: number
+  stockVishalShop: number
   lowStockThreshold: number
   order: number // ordering for cheap -> premium display; lower sorts first
   createdAt: number
   updatedAt: number
+}
+
+export type TransferDirection = 'out' | 'in' // out = my shop -> Vishal's; in = Vishal's -> my shop
+
+export interface StockTransfer {
+  id?: number
+  variantId: number
+  productId: number
+  direction: TransferDirection
+  qty: number
+  date: string // yyyy-MM-dd, user-picked transfer date
+  note?: string
+  createdAt: number
 }
 
 export interface Sale {
@@ -74,6 +88,7 @@ export const db = new Dexie('LedgrDB') as Dexie & {
   categories: EntityTable<Category, 'id'>
   settings: EntityTable<Setting, 'key'>
   drawerCounts: EntityTable<DrawerCount, 'id'>
+  stockTransfers: EntityTable<StockTransfer, 'id'>
 }
 
 db.version(1).stores({
@@ -166,6 +181,24 @@ db.version(5)
         sale.variantId = mapped.variantId
       }
       delete sale.itemId
+    })
+  })
+
+// v6: split each variant's single stock count into two shop-specific counts
+// so stock moving between the two physical locations can be tracked as an
+// explicit transfer instead of a silent edit. Existing stock becomes the
+// "my shop" balance; Vishal's shop starts at 0 until a transfer moves stock
+// there.
+db.version(6)
+  .stores({
+    variants: '++id, productId, label, sku, stockMyShop, stockVishalShop, costUnknown, order',
+    stockTransfers: '++id, variantId, productId, direction, date, createdAt',
+  })
+  .upgrade(async (tx) => {
+    await tx.table('variants').toCollection().modify((variant) => {
+      variant.stockMyShop = variant.stock ?? 0
+      variant.stockVishalShop = 0
+      delete variant.stock
     })
   })
 

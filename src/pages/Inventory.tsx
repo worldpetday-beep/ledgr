@@ -1,10 +1,11 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, DEFAULT_CATEGORIES, UNIT_TYPES, type Currency, type Product, type Variant } from '../db'
+import { db, DEFAULT_CATEGORIES, UNIT_TYPES, type Currency, type Product, type Variant, type TransferDirection } from '../db'
 import { Card, Button, Modal, Field, inputClass, Badge, Switch, Pill } from '../components/ui'
 import { PlusIcon, SearchIcon, EditIcon, TrashIcon, SettingsIcon } from '../components/icons'
 import { ItemThumb } from '../components/ItemThumb'
 import { money, isLowStock, selectOnFocus } from '../lib/format'
+import { format } from 'date-fns'
 
 interface VariantRow {
   key: string
@@ -15,7 +16,8 @@ interface VariantRow {
   costUnknown: boolean
   sellPrice: number
   currency: Currency
-  stock: number
+  stockMyShop: number
+  stockVishalShop: number
   lowStockThreshold: number
 }
 
@@ -28,7 +30,8 @@ function blankVariantRow(order: number): VariantRow {
     costUnknown: true,
     sellPrice: 0,
     currency: 'USD',
-    stock: 0,
+    stockMyShop: 0,
+    stockVishalShop: 0,
     lowStockThreshold: 3,
   }
 }
@@ -58,6 +61,18 @@ export default function Inventory() {
   const [unitsModalOpen, setUnitsModalOpen] = useState(false)
   const [unitsCategoryName, setUnitsCategoryName] = useState('')
   const [unitsDraft, setUnitsDraft] = useState<string[]>([])
+
+  const [transferDirection, setTransferDirection] = useState<TransferDirection>('out')
+  const [transferProductId, setTransferProductId] = useState<number | ''>('')
+  const [transferVariantId, setTransferVariantId] = useState<number | ''>('')
+  const [transferQty, setTransferQty] = useState<number>(0)
+  const [transferDate, setTransferDate] = useState(() => format(Date.now(), 'yyyy-MM-dd'))
+  const [transferError, setTransferError] = useState<string | null>(null)
+
+  const recentTransfers = useLiveQuery(
+    () => db.stockTransfers.orderBy('createdAt').reverse().limit(10).toArray(),
+    [],
+  )
 
   const variantsByProduct = useMemo(() => {
     const map = new Map<number, Variant[]>()
@@ -133,7 +148,8 @@ export default function Inventory() {
             costUnknown: v.costUnknown,
             sellPrice: v.sellPrice,
             currency: v.currency,
-            stock: v.stock,
+            stockMyShop: v.stockMyShop,
+            stockVishalShop: v.stockVishalShop,
             lowStockThreshold: v.lowStockThreshold,
           }))
         : [blankVariantRow(0)],
@@ -188,7 +204,8 @@ export default function Inventory() {
           costUnknown: row.costUnknown,
           sellPrice: row.sellPrice,
           currency: row.currency,
-          stock: row.stock,
+          stockMyShop: row.stockMyShop,
+          stockVishalShop: row.stockVishalShop,
           lowStockThreshold: row.lowStockThreshold,
           order: idx,
           updatedAt: now,
@@ -214,6 +231,46 @@ export default function Inventory() {
       await db.variants.bulkDelete(vs.map((v) => v.id!))
       await db.products.delete(product.id!)
     })
+  }
+
+  const transferVariantOptions = transferProductId ? variantsByProduct.get(transferProductId) ?? [] : []
+
+  async function submitTransfer() {
+    setTransferError(null)
+    if (!transferProductId || !transferVariantId) {
+      setTransferError('Pick a product and variant to transfer.')
+      return
+    }
+    if (!transferQty || transferQty <= 0) {
+      setTransferError('Quantity must be at least 1.')
+      return
+    }
+
+    const productId = transferProductId
+    const variantId = transferVariantId
+
+    await db.transaction('rw', db.variants, db.stockTransfers, async () => {
+      const variant = await db.variants.get(variantId)
+      if (!variant) return
+      const fromField = transferDirection === 'out' ? 'stockMyShop' : 'stockVishalShop'
+      const toField = transferDirection === 'out' ? 'stockVishalShop' : 'stockMyShop'
+      await db.variants.update(variantId, {
+        [fromField]: Math.max(0, variant[fromField] - transferQty),
+        [toField]: variant[toField] + transferQty,
+        updatedAt: Date.now(),
+      })
+      await db.stockTransfers.add({
+        variantId,
+        productId,
+        direction: transferDirection,
+        qty: transferQty,
+        date: transferDate,
+        createdAt: Date.now(),
+      })
+    })
+
+    setTransferQty(0)
+    setTransferVariantId('')
   }
 
   function openUnitsEditor(categoryName: string) {
@@ -291,6 +348,104 @@ export default function Inventory() {
         )}
       </div>
 
+      <Card>
+        <h2 className="mb-1 text-sm font-semibold">Internal Stock Transfer</h2>
+        <p className="mb-3 text-xs text-[var(--text-muted)]">
+          Move stock between your shop and Vishal's shop — this replaces the physical transfer log.
+        </p>
+        <div className="flex flex-col gap-3">
+          <Pill
+            options={[
+              { label: 'Transfer OUT (to Vishal)', value: 'out' },
+              { label: 'Transfer IN (from Vishal)', value: 'in' },
+            ]}
+            value={transferDirection}
+            onChange={setTransferDirection}
+          />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <Field label="Product">
+              <select
+                className={inputClass}
+                value={transferProductId}
+                onChange={(e) => {
+                  setTransferProductId(e.target.value ? Number(e.target.value) : '')
+                  setTransferVariantId('')
+                }}
+              >
+                <option value="">Select product</option>
+                {(products ?? []).map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Variant">
+              <select
+                className={inputClass}
+                value={transferVariantId}
+                disabled={!transferProductId}
+                onChange={(e) => setTransferVariantId(e.target.value ? Number(e.target.value) : '')}
+              >
+                <option value="">Select variant</option>
+                {transferVariantOptions.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label} ({transferDirection === 'out' ? v.stockMyShop : v.stockVishalShop} available)
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Quantity">
+              <input
+                type="number"
+                min={1}
+                className={inputClass}
+                value={transferQty}
+                onFocus={selectOnFocus}
+                onChange={(e) => setTransferQty(Number(e.target.value) || 0)}
+              />
+            </Field>
+            <Field label="Date">
+              <input
+                type="date"
+                className={inputClass}
+                value={transferDate}
+                onChange={(e) => setTransferDate(e.target.value)}
+              />
+            </Field>
+          </div>
+          {transferError && (
+            <div className="rounded-lg bg-[var(--status-critical)]/10 px-3 py-2 text-sm text-[var(--status-critical)]">
+              {transferError}
+            </div>
+          )}
+          <Button onClick={submitTransfer} className="self-start">Record transfer</Button>
+        </div>
+
+        {recentTransfers && recentTransfers.length > 0 && (
+          <div className="mt-4 border-t border-[var(--gridline)] pt-3">
+            <h3 className="mb-2 text-xs font-semibold text-[var(--text-muted)]">Recent transfers</h3>
+            <ul className="flex flex-col gap-2">
+              {recentTransfers.map((t) => {
+                const variant = (allVariants ?? []).find((v) => v.id === t.variantId)
+                const product = (products ?? []).find((p) => p.id === t.productId)
+                return (
+                  <li key={t.id} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-medium">
+                      {product?.name ?? 'Unknown item'}
+                      {variant && variant.label !== 'Standard' ? ` — ${variant.label}` : ''}
+                    </span>
+                    <span className="tabular text-[var(--text-secondary)]">
+                      {t.direction === 'out' ? '→ Vishal' : '← Vishal'} · {t.qty} · {t.date}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )}
+      </Card>
+
       {view === 'list' ? (
         <Card>
           <div className="overflow-x-auto">
@@ -301,7 +456,8 @@ export default function Inventory() {
                   <th className="pb-2 font-medium">Product</th>
                   <th className="pb-2 font-medium">Category</th>
                   <th className="pb-2 font-medium">Variants</th>
-                  <th className="pb-2 font-medium">Stock</th>
+                  <th className="pb-2 font-medium">My Shop</th>
+                  <th className="pb-2 font-medium">Vishal's</th>
                   <th className="pb-2 font-medium">Sell</th>
                   <th className="pb-2 font-medium"></th>
                 </tr>
@@ -309,8 +465,9 @@ export default function Inventory() {
               <tbody>
                 {filtered.map((product) => {
                   const variants = variantsByProduct.get(product.id!) ?? []
-                  const stockSum = variants.reduce((s, v) => s + v.stock, 0)
-                  const lowAny = variants.some((v) => isLowStock(v.stock, v.lowStockThreshold))
+                  const stockMySum = variants.reduce((s, v) => s + v.stockMyShop, 0)
+                  const stockVishalSum = variants.reduce((s, v) => s + v.stockVishalShop, 0)
+                  const lowAny = variants.some((v) => isLowStock(v.stockMyShop, v.lowStockThreshold))
                   const anyMissing = variants.some((v) => v.costUnknown)
                   const sellValues = variants.map((v) => v.sellPrice)
                   const currency = variants[0]?.currency ?? 'USD'
@@ -339,9 +496,10 @@ export default function Inventory() {
                           </button>
                         </td>
                         <td className="py-2 pr-2">
-                          <span className="tabular">{stockSum}</span>
+                          <span className="tabular">{stockMySum}</span>
                           {lowAny && <Badge tone="critical">Low</Badge>}
                         </td>
+                        <td className="tabular py-2 pr-2 text-[var(--text-secondary)]">{stockVishalSum}</td>
                         <td className="tabular py-2 pr-2">
                           {min === max ? money(min, currency) : `${money(min, currency)}–${money(max, currency)}`}
                         </td>
@@ -359,7 +517,7 @@ export default function Inventory() {
                       {expanded && (
                         <tr key={`${product.id}-variants`} className="bg-[var(--page-plane)]">
                           <td></td>
-                          <td colSpan={6} className="py-2 pr-2">
+                          <td colSpan={7} className="py-2 pr-2">
                             <div className="flex flex-col gap-1.5">
                               {variants.map((v) => (
                                 <div key={v.id} className="flex items-center justify-between gap-2 text-xs">
@@ -374,8 +532,8 @@ export default function Inventory() {
                                       <span className="tabular text-[var(--text-muted)]">{money(v.costPrice, v.currency)} cost</span>
                                     )}
                                     <span className="tabular">{money(v.sellPrice, v.currency)} sell</span>
-                                    <span className="tabular">{v.stock} in stock</span>
-                                    {isLowStock(v.stock, v.lowStockThreshold) && <Badge tone="critical">Low</Badge>}
+                                    <span className="tabular">{v.stockMyShop} mine · {v.stockVishalShop} Vishal's</span>
+                                    {isLowStock(v.stockMyShop, v.lowStockThreshold) && <Badge tone="critical">Low</Badge>}
                                   </span>
                                 </div>
                               ))}
@@ -388,7 +546,7 @@ export default function Inventory() {
                 })}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="py-8 text-center text-sm text-[var(--text-muted)]">
+                    <td colSpan={8} className="py-8 text-center text-sm text-[var(--text-muted)]">
                       No products yet. Add them as you go — you don't need it all at once.
                     </td>
                   </tr>
@@ -400,7 +558,7 @@ export default function Inventory() {
       ) : (
         <div className="flex flex-col gap-4">
           {byCategory.map(([category, catProducts]) => {
-            const stockOf = (p: Product) => (variantsByProduct.get(p.id!) ?? []).reduce((s, v) => s + v.stock, 0)
+            const stockOf = (p: Product) => (variantsByProduct.get(p.id!) ?? []).reduce((s, v) => s + v.stockMyShop, 0)
             const maxStock = Math.max(1, ...catProducts.map(stockOf))
             return (
               <Card key={category}>
@@ -409,8 +567,8 @@ export default function Inventory() {
                   {catProducts.map((product) => {
                     const variants = variantsByProduct.get(product.id!) ?? []
                     const stock = stockOf(product)
-                    const low = variants.some((v) => isLowStock(v.stock, v.lowStockThreshold))
-                    const ok = variants.length > 0 && variants.every((v) => v.stock > v.lowStockThreshold * 2)
+                    const low = variants.some((v) => isLowStock(v.stockMyShop, v.lowStockThreshold))
+                    const ok = variants.length > 0 && variants.every((v) => v.stockMyShop > v.lowStockThreshold * 2)
                     const tone = low ? 'critical' : ok ? 'good' : 'warning'
                     const scale = 0.85 + 0.65 * Math.min(1, stock / maxStock)
                     const toneColor =
@@ -549,25 +707,34 @@ export default function Inventory() {
                     <option value="LRD">LRD</option>
                   </select>
                 </div>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  placeholder="Sell price"
+                  className={inputClass}
+                  value={row.sellPrice}
+                  onFocus={selectOnFocus}
+                  onChange={(e) => updateVariantRow(row.key, { sellPrice: Number(e.target.value) || 0 })}
+                />
                 <div className="grid grid-cols-2 gap-2">
                   <input
                     type="number"
                     min={0}
-                    step="0.01"
-                    placeholder="Sell price"
+                    placeholder="Stock — My Shop"
                     className={inputClass}
-                    value={row.sellPrice}
+                    value={row.stockMyShop}
                     onFocus={selectOnFocus}
-                    onChange={(e) => updateVariantRow(row.key, { sellPrice: Number(e.target.value) || 0 })}
+                    onChange={(e) => updateVariantRow(row.key, { stockMyShop: Number(e.target.value) || 0 })}
                   />
                   <input
                     type="number"
                     min={0}
-                    placeholder="Stock on hand"
+                    placeholder="Stock — Vishal's Shop"
                     className={inputClass}
-                    value={row.stock}
+                    value={row.stockVishalShop}
                     onFocus={selectOnFocus}
-                    onChange={(e) => updateVariantRow(row.key, { stock: Number(e.target.value) || 0 })}
+                    onChange={(e) => updateVariantRow(row.key, { stockVishalShop: Number(e.target.value) || 0 })}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
