@@ -13,6 +13,7 @@ import {
   reserveNextCustomerNumber,
   peekNextCustomerNumber,
   NEXT_CUSTOMER_NUMBER_KEY,
+  reserveNextOrderNumber,
   UNIT_TYPES,
   type Currency,
   type Category,
@@ -206,6 +207,7 @@ export function RecordSaleSheet({
     try {
       await db.transaction('rw', db.sales, db.products, db.variants, db.settings, async () => {
         const customerNumber = sameAsLast && lastSale ? lastSale.customerNumber : await reserveNextCustomerNumber()
+        const orderNumber = await reserveNextOrderNumber()
         const timestamp = Date.now()
 
         for (const line of resolved) {
@@ -289,6 +291,7 @@ export function RecordSaleSheet({
             currency: line.currency,
             timestamp,
             customerNumber,
+            orderNumber,
             tbs,
             pickedUp: !tbs,
           })

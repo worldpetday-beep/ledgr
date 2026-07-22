@@ -58,6 +58,7 @@ export interface Sale {
   timestamp: number // epoch ms
   customerNumber: number // running ticket number, never resets, never reused
   customerName?: string // optional override label if the customer is known/renamed
+  orderNumber: number // one per checkout/invoice (starts at 1000), shared by every line item in that sale
   tbs: boolean // "to be shipped/picked up" — customer already paid, goods still in store
   pickedUp: boolean // for tbs sales: whether stock has actually been handed over yet
 }
@@ -202,6 +203,38 @@ db.version(6)
     })
   })
 
+// v7: add a dedicated order-number sequence (starting at 1000) separate from
+// customerNumber. One order can span multiple sale rows (one per line item
+// in an invoice) that were all submitted together and share the same exact
+// timestamp; each such group becomes one order and gets one order number,
+// assigned chronologically so historical sales keep a sensible sequence.
+db.version(7)
+  .stores({
+    sales: '++id, productId, variantId, itemName, category, currency, timestamp, customerNumber, tbs, orderNumber',
+  })
+  .upgrade(async (tx) => {
+    const allSales = await tx.table('sales').orderBy('timestamp').toArray()
+    const groupOrder: string[] = []
+    const groups = new Map<string, number[]>()
+    for (const sale of allSales) {
+      const key = `${sale.customerNumber}:${sale.timestamp}`
+      if (!groups.has(key)) {
+        groups.set(key, [])
+        groupOrder.push(key)
+      }
+      groups.get(key)!.push(sale.id)
+    }
+
+    let counter = ORDER_NUMBER_BASE
+    for (const key of groupOrder) {
+      const orderNumber = counter++
+      for (const id of groups.get(key)!) {
+        await tx.table('sales').update(id, { orderNumber })
+      }
+    }
+    await tx.table('settings').put({ key: NEXT_ORDER_NUMBER_KEY, value: String(counter) })
+  })
+
 export const EXCHANGE_RATE_KEY = 'exchangeRateLrdPerUsd'
 export const DEFAULT_EXCHANGE_RATE = 180
 
@@ -227,5 +260,20 @@ export function peekNextCustomerNumber(row: Setting | undefined): number {
 }
 
 export { NEXT_CUSTOMER_NUMBER_KEY }
+
+export const NEXT_ORDER_NUMBER_KEY = 'nextOrderNumber'
+export const ORDER_NUMBER_BASE = 1000
+
+// Reserves and returns the next order number for a whole invoice (shared by
+// every line item submitted together), starting at ORDER_NUMBER_BASE and
+// never resetting or reusing a number even after deletes.
+export async function reserveNextOrderNumber(): Promise<number> {
+  return db.transaction('rw', db.settings, async () => {
+    const row = await db.settings.get(NEXT_ORDER_NUMBER_KEY)
+    const current = row ? parseInt(row.value, 10) : ORDER_NUMBER_BASE
+    await db.settings.put({ key: NEXT_ORDER_NUMBER_KEY, value: String(current + 1) })
+    return current
+  })
+}
 
 export const DEFAULT_CATEGORIES = ['General', 'Beverages', 'Snacks', 'Household', 'Personal Care', 'Electronics', 'Clothing']
