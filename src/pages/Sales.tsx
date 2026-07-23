@@ -57,7 +57,12 @@ export default function Sales() {
     }
     const groups: OrderGroup[] = Array.from(map.entries()).map(([orderNumber, lines]) => {
       const totals: Partial<Record<Currency, number>> = {}
-      for (const l of lines) totals[l.currency] = (totals[l.currency] ?? 0) + l.soldFor
+      for (const l of lines) {
+        totals[l.currency] = (totals[l.currency] ?? 0) + l.soldFor
+        if (l.secondaryCurrency && l.secondaryAmount) {
+          totals[l.secondaryCurrency] = (totals[l.secondaryCurrency] ?? 0) + l.secondaryAmount
+        }
+      }
       return {
         orderNumber,
         timestamp: lines[0].timestamp,
@@ -250,7 +255,8 @@ export default function Sales() {
                                 <div className="tabular text-xs text-gray-500">
                                   {line.variant && `${line.variant} · `}
                                   {line.qty}
-                                  {line.unitType && ` ${line.unitType}`} · {money(line.soldFor, line.currency)} ·{' '}
+                                  {line.unitType && ` ${line.unitType}`} · {money(line.soldFor, line.currency)}
+                                  {line.secondaryCurrency && line.secondaryAmount ? ` + ${money(line.secondaryAmount, line.secondaryCurrency)}` : ''} ·{' '}
                                   {line.location === 'vishalShop' ? 'Warehouse (Vishal)' : 'Store floor'}
                                 </div>
                               </div>

@@ -9,6 +9,15 @@ function daysAgo(n: number): number {
   return Date.now() - n * 24 * 60 * 60 * 1000
 }
 
+// Adds a sale's primary (and, if the line was split-paid, secondary) amount
+// into a per-currency totals bucket.
+function addSaleAmounts(totals: Partial<Record<Currency, number>>, s: Sale): void {
+  totals[s.currency] = (totals[s.currency] ?? 0) + s.soldFor
+  if (s.secondaryCurrency && s.secondaryAmount) {
+    totals[s.secondaryCurrency] = (totals[s.secondaryCurrency] ?? 0) + s.secondaryAmount
+  }
+}
+
 const STOPWORDS = new Set([
   'which', 'who', 'what', 'is', 'my', 'the', 'a', 'an', 'in', 'of', 'did', 'has', 'have',
   'bought', 'buy', 'buys', 'brought', 'purchase', 'purchased', 'purchases', 'customer',
@@ -62,7 +71,7 @@ async function answerTopDay(): Promise<string> {
   for (const s of sales) {
     const key = dateKeyMonrovia(s.timestamp)
     const entry = byDay.get(key) ?? {}
-    entry[s.currency] = (entry[s.currency] ?? 0) + s.soldFor
+    addSaleAmounts(entry, s)
     byDay.set(key, entry)
   }
 
@@ -87,7 +96,7 @@ async function answerTopCustomer(): Promise<string> {
   const byCustomer = new Map<number, { label: string; totals: Partial<Record<Currency, number>>; orders: Set<number> }>()
   for (const s of sales) {
     const entry = byCustomer.get(s.customerNumber) ?? { label: customerLabel(s), totals: {}, orders: new Set<number>() }
-    entry.totals[s.currency] = (entry.totals[s.currency] ?? 0) + s.soldFor
+    addSaleAmounts(entry.totals, s)
     entry.orders.add(s.orderNumber)
     if (s.customerName) entry.label = s.customerName
     byCustomer.set(s.customerNumber, entry)
@@ -134,7 +143,7 @@ async function answerTotalsForPeriod(q: string): Promise<string> {
 
   const sales = await db.sales.where('timestamp').between(from, to, true, true).toArray()
   const totals: Partial<Record<Currency, number>> = {}
-  for (const s of sales) totals[s.currency] = (totals[s.currency] ?? 0) + s.soldFor
+  for (const s of sales) addSaleAmounts(totals, s)
   const parts = (Object.entries(totals) as [Currency, number][]).map(([c, amt]) => money(amt, c))
   if (parts.length === 0) return `No sales recorded for ${label}.`
   return `Total sales for ${label}: ${parts.join(' + ')} across ${sales.length} line item${sales.length === 1 ? '' : 's'}.`

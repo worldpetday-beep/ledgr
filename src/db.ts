@@ -2,7 +2,7 @@ import Dexie, { type EntityTable } from 'dexie'
 
 export type Currency = 'USD' | 'LRD'
 
-export const UNIT_TYPES = ['Piece', 'Carton', 'Sheet', 'Bundle', 'Yard', 'Gallon', 'Bucket', 'Pack', 'Other']
+export const UNIT_TYPES = ['Piece', 'Carton', 'Sheet', 'Bundle', 'Roll', 'Yard', 'Gallon', 'Bucket', 'Pack', 'Other']
 
 export interface ProductOption {
   name: string // e.g. "Size", "Color"
@@ -63,9 +63,15 @@ export interface Sale {
   variant?: string // variant/size label at time of sale
   qty: number
   unitType?: string // Carton, Sheet, Bundle, Yard, Gallon, Bucket, Piece, Pack, or a custom unit
-  soldFor: number // total sale price for the qty
+  soldFor: number // total sale price for the qty, in `currency`
   costAtSale: number // total cost for the qty
   currency: Currency
+  // A single line can be split-paid across both currencies at the register
+  // (e.g. $5 + L$400 for one item) -- when that happens, `soldFor`/`currency`
+  // hold the primary portion and these hold the rest. Absent when the line
+  // was paid in a single currency.
+  secondaryAmount?: number
+  secondaryCurrency?: Currency
   timestamp: number // epoch ms
   customerNumber: number // running ticket number, never resets, never reused
   customerName?: string // optional override label if the customer is known/renamed

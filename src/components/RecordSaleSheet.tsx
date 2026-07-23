@@ -1,12 +1,4 @@
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   db,
@@ -26,62 +18,55 @@ import { ItemThumb } from './ItemThumb'
 import { SearchIcon, PlusIcon, TrashIcon } from './icons'
 import { money, selectOnFocus } from '../lib/format'
 
-interface SaleLineState {
+type Step = 'qty' | 'unit' | 'item' | 'price'
+
+interface CommittedLine {
   key: string
-  query: string
+  name: string
   selectedProduct: Product | null
   selectedVariantId: number | null
+  manualVariant: string
   qty: number
   unitType: string
   customUnit: string
+  location: FulfillmentLocation
+  usdAmount: number
+  lrdAmount: number
+}
+
+interface DraftLine {
+  qty: number
+  unitType: string
+  customUnit: string
+  query: string
+  selectedProduct: Product | null
+  selectedVariantId: number | null
   manualVariant: string
-  soldFor: number
-  currency: Currency
-  manualCost: number
   location: FulfillmentLocation
 }
 
-function blankLine(currency: Currency = 'USD', location: FulfillmentLocation = 'myShop'): SaleLineState {
+function blankDraft(location: FulfillmentLocation = 'myShop'): DraftLine {
   return {
-    key: `line-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    query: '',
-    selectedProduct: null,
-    selectedVariantId: null,
     qty: 1,
     unitType: 'Piece',
     customUnit: '',
+    query: '',
+    selectedProduct: null,
+    selectedVariantId: null,
     manualVariant: '',
-    soldFor: 0,
-    currency,
-    manualCost: 0,
     location,
   }
 }
 
-interface LineLiveValues {
-  name: string
-  qty: number
-  soldFor: number
-  manualVariant: string
-  manualCost: number
+function unitLabel(line: { unitType: string; customUnit: string }): string {
+  return line.unitType === 'Other' ? line.customUnit.trim() || 'unit' : line.unitType
 }
 
-interface LineHandle {
-  getLiveValues(): LineLiveValues
-  focusQty(): void
-}
-
-function sumByCurrency(lines: { currency: Currency; amount: number }[]): Partial<Record<Currency, number>> {
-  const totals: Partial<Record<Currency, number>> = {}
-  for (const l of lines) totals[l.currency] = (totals[l.currency] ?? 0) + l.amount
-  return totals
-}
-
-function formatCurrencyTotals(totals: Partial<Record<Currency, number>>): string {
-  const parts = (Object.entries(totals) as [Currency, number][])
-    .filter(([, amt]) => amt !== 0)
-    .map(([cur, amt]) => money(amt, cur))
-  return parts.length > 0 ? parts.join(' + ') : money(0, 'USD')
+function formatLineAmounts(l: CommittedLine): string {
+  const parts: string[] = []
+  if (l.usdAmount > 0) parts.push(money(l.usdAmount, 'USD'))
+  if (l.lrdAmount > 0) parts.push(money(l.lrdAmount, 'LRD'))
+  return parts.length > 0 ? parts.join(' + ') : '—'
 }
 
 export function RecordSaleSheet({
@@ -101,13 +86,21 @@ export function RecordSaleSheet({
   const allVariants = useLiveQuery(() => (open ? db.variants.toArray() : []), [open])
   const categories = useLiveQuery(() => (open ? db.categories.toArray() : []), [open])
 
-  const [lines, setLines] = useState<SaleLineState[]>([blankLine()])
+  const [lines, setLines] = useState<CommittedLine[]>([])
+  const [step, setStep] = useState<Step>('qty')
+  const [draft, setDraft] = useState<DraftLine>(blankDraft())
+  const [generation, setGeneration] = useState(0) // bumped each time we start a fresh line, forces qty input remount+refocus
   const [sameAsLast, setSameAsLast] = useState(false)
   const [tbs, setTbs] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const lineHandles = useRef(new Map<string, LineHandle>())
+  const qtyRef = useRef<HTMLInputElement>(null)
+  const customUnitRef = useRef<HTMLInputElement>(null)
+  const itemRef = useRef<HTMLInputElement>(null)
+  const manualVariantRef = useRef<HTMLInputElement>(null)
+  const usdRef = useRef<HTMLInputElement>(null)
+  const lrdRef = useRef<HTMLInputElement>(null)
 
   const nextCounterRow = useLiveQuery(() => (open ? db.settings.get(NEXT_CUSTOMER_NUMBER_KEY) : undefined), [open])
   const nextNumber = peekNextCustomerNumber(nextCounterRow)
@@ -133,78 +126,144 @@ export function RecordSaleSheet({
     return map
   }, [variantsByProduct])
 
+  const categoryAllowedUnits = useMemo(() => {
+    const categoryName = draft.selectedProduct?.category ?? 'General'
+    const cat = (categories ?? []).find((c: Category) => c.name === categoryName)
+    return cat?.allowedUnits && cat.allowedUnits.length > 0 ? cat.allowedUnits : null
+  }, [categories, draft.selectedProduct])
+
+  const availableUnits = useMemo(() => {
+    if (!categoryAllowedUnits) return UNIT_TYPES
+    return categoryAllowedUnits.includes('Other') ? categoryAllowedUnits : [...categoryAllowedUnits, 'Other']
+  }, [categoryAllowedUnits])
+
+  const filteredProducts = useMemo(() => {
+    if (!draft.query.trim()) return (products ?? []).slice(0, 6)
+    const q = draft.query.toLowerCase()
+    return (products ?? []).filter((p) => p.name.toLowerCase().includes(q)).slice(0, 6)
+  }, [products, draft.query])
+
+  const variantsForSelected = draft.selectedProduct ? variantsByProduct.get(draft.selectedProduct.id!) ?? [] : []
+
   // Reset the whole sheet each time it's opened fresh.
   useEffect(() => {
     if (open) {
-      setLines([blankLine()])
+      setLines([])
+      setStep('qty')
+      setDraft(blankDraft())
+      setGeneration((g) => g + 1)
       setSameAsLast(false)
       setTbs(false)
       setSaveError(null)
       setSaving(false)
-      setTimeout(() => {
-        const firstKey = lines[0]?.key
-        if (firstKey) lineHandles.current.get(firstKey)?.focusQty()
-      }, 50)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  function updateLine(key: string, patch: Partial<SaleLineState>) {
-    setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)))
+  function startNewLine(location: FulfillmentLocation) {
+    setDraft(blankDraft(location))
+    setStep('qty')
+    setGeneration((g) => g + 1)
   }
 
-  function addLine() {
-    const lastCurrency = lines[lines.length - 1]?.currency ?? 'USD'
-    const lastLocation = lines[lines.length - 1]?.location ?? 'myShop'
-    const newLine = blankLine(lastCurrency, lastLocation)
-    setLines((prev) => [...prev, newLine])
-    setTimeout(() => lineHandles.current.get(newLine.key)?.focusQty(), 50)
+  function advanceFromQty() {
+    const val = Number(qtyRef.current?.value) || 0
+    if (val <= 0) {
+      setSaveError('Quantity must be at least 1.')
+      return
+    }
+    setSaveError(null)
+    setDraft((d) => ({ ...d, qty: val }))
+    setStep('unit')
+  }
+
+  function chooseUnit(u: string) {
+    setDraft((d) => ({ ...d, unitType: u }))
+    if (u === 'Other') {
+      setTimeout(() => customUnitRef.current?.focus(), 0)
+      return
+    }
+    setStep('item')
+    setTimeout(() => itemRef.current?.focus(), 0)
+  }
+
+  function pickProduct(p: Product) {
+    const variants = variantsByProduct.get(p.id!) ?? []
+    setDraft((d) => ({ ...d, selectedProduct: p, query: p.name, selectedVariantId: variants[0]?.id ?? null }))
+    if (variants.length <= 1) setStep('price')
+  }
+
+  function pickVariant(v: Variant) {
+    setDraft((d) => ({ ...d, selectedVariantId: v.id! }))
+    setStep('price')
+  }
+
+  function confirmItem() {
+    const name = draft.selectedProduct ? draft.selectedProduct.name : draft.query.trim()
+    if (!name) {
+      setSaveError('Enter an item name or pick one from the list.')
+      return
+    }
+    if (draft.selectedProduct && variantsForSelected.length > 1 && !draft.selectedVariantId) {
+      setSaveError('Pick a variant for this item.')
+      return
+    }
+    setSaveError(null)
+    setStep('price')
+  }
+
+  function commitLine() {
+    const usdAmount = Number(usdRef.current?.value) || 0
+    const lrdAmount = Number(lrdRef.current?.value) || 0
+    if (usdAmount <= 0 && lrdAmount <= 0) {
+      setSaveError('Enter a price in USD, LRD, or both.')
+      return
+    }
+    const name = draft.selectedProduct ? draft.selectedProduct.name : draft.query.trim()
+    setLines((prev) => [
+      ...prev,
+      {
+        key: `line-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name,
+        selectedProduct: draft.selectedProduct,
+        selectedVariantId: draft.selectedVariantId,
+        manualVariant: draft.manualVariant,
+        qty: draft.qty,
+        unitType: draft.unitType,
+        customUnit: draft.customUnit,
+        location: draft.location,
+        usdAmount,
+        lrdAmount,
+      },
+    ])
+    setSaveError(null)
+    startNewLine(draft.location)
   }
 
   function removeLine(key: string) {
-    setLines((prev) => (prev.length > 1 ? prev.filter((l) => l.key !== key) : prev))
-    lineHandles.current.delete(key)
+    setLines((prev) => prev.filter((l) => l.key !== key))
   }
 
-  const grandTotal = useMemo(
-    () => formatCurrencyTotals(sumByCurrency(lines.map((l) => ({ currency: l.currency, amount: l.soldFor })))),
-    [lines],
-  )
+  function onEnterAdvance(next: () => void) {
+    return (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        next()
+      }
+    }
+  }
+
+  const grandTotalUsd = lines.reduce((s, l) => s + l.usdAmount, 0)
+  const grandTotalLrd = lines.reduce((s, l) => s + l.lrdAmount, 0)
+  const grandTotalParts: string[] = []
+  if (grandTotalUsd > 0) grandTotalParts.push(money(grandTotalUsd, 'USD'))
+  if (grandTotalLrd > 0) grandTotalParts.push(money(grandTotalLrd, 'LRD'))
+  const grandTotal = grandTotalParts.length > 0 ? grandTotalParts.join(' + ') : money(0, 'USD')
 
   async function submit() {
     setSaveError(null)
-
-    // Read every line's live DOM values rather than trusting closed-over
-    // React state: if "Record Sale" is tapped in the same instant as the
-    // last keystroke on any line, the click can fire before that
-    // keystroke's state update has committed. Reading straight from each
-    // line's inputs makes this immune to that race regardless of typing
-    // or tapping speed.
-    const resolved = lines.map((line) => {
-      const live = lineHandles.current.get(line.key)?.getLiveValues() ?? {
-        name: '',
-        qty: 0,
-        soldFor: 0,
-        manualVariant: '',
-        manualCost: 0,
-      }
-      const name = line.selectedProduct ? line.selectedProduct.name : live.name.trim()
-      return { ...line, ...live, name }
-    })
-
-    for (const [i, line] of resolved.entries()) {
-      if (!line.name) {
-        setSaveError(`Item ${i + 1}: enter an item name, or pick one from the product search.`)
-        return
-      }
-      if (!Number.isFinite(line.qty) || line.qty <= 0) {
-        setSaveError(`Item ${i + 1}: quantity must be at least 1.`)
-        return
-      }
-      if (!Number.isFinite(line.soldFor) || line.soldFor < 0) {
-        setSaveError(`Item ${i + 1}: total can't be negative.`)
-        return
-      }
+    if (lines.length === 0) {
+      setSaveError('Add at least one item before recording the sale.')
+      return
     }
 
     setSaving(true)
@@ -214,17 +273,24 @@ export function RecordSaleSheet({
         const orderNumber = await reserveNextOrderNumber()
         const timestamp = Date.now()
 
-        for (const line of resolved) {
+        for (const line of lines) {
           const selectedVariant = line.selectedProduct
             ? (variantsByProduct.get(line.selectedProduct.id!) ?? []).find((v) => v.id === line.selectedVariantId) ?? null
             : null
-          const costUnknown = selectedVariant ? selectedVariant.costUnknown : line.manualCost <= 0
-          const costTotal = selectedVariant ? selectedVariant.costPrice * line.qty : costUnknown ? 0 : line.manualCost
+          // Cost stays isolated to the inventory catalog — a brand-new free-text
+          // item simply has no known cost yet (costUnknown stays true on its variant).
+          const costTotal = selectedVariant ? selectedVariant.costPrice * line.qty : 0
 
           let productId = line.selectedProduct?.id
           let variantId = selectedVariant?.id
           let productCategory = line.selectedProduct?.category
           let variantLabel: string | undefined = selectedVariant?.label
+
+          const primaryCurrency: Currency = line.usdAmount > 0 ? 'USD' : 'LRD'
+          const primaryAmount = primaryCurrency === 'USD' ? line.usdAmount : line.lrdAmount
+          const hasSecondary = line.usdAmount > 0 && line.lrdAmount > 0
+          const secondaryCurrency: Currency | undefined = hasSecondary ? 'LRD' : undefined
+          const secondaryAmount = hasSecondary ? line.lrdAmount : undefined
 
           if (!line.selectedProduct) {
             const existingProduct = await db.products.where('name').equalsIgnoreCase(line.name).first()
@@ -249,10 +315,10 @@ export function RecordSaleSheet({
                   productId: existingProduct.id!,
                   label: newLabel,
                   optionValues: [],
-                  costPrice: costUnknown ? 0 : line.manualCost,
-                  costUnknown,
-                  sellPrice: line.qty > 0 ? line.soldFor / line.qty : line.soldFor,
-                  currency: line.currency,
+                  costPrice: 0,
+                  costUnknown: true,
+                  sellPrice: line.qty > 0 ? primaryAmount / line.qty : primaryAmount,
+                  currency: primaryCurrency,
                   stockMyShop: 0,
                   stockVishalShop: 0,
                   lowStockThreshold: 3,
@@ -279,10 +345,10 @@ export function RecordSaleSheet({
                 productId,
                 label: variantLabel,
                 optionValues: [],
-                costPrice: costUnknown ? 0 : line.manualCost,
-                costUnknown,
-                sellPrice: line.qty > 0 ? line.soldFor / line.qty : line.soldFor,
-                currency: line.currency,
+                costPrice: 0,
+                costUnknown: true,
+                sellPrice: line.qty > 0 ? primaryAmount / line.qty : primaryAmount,
+                currency: primaryCurrency,
                 stockMyShop: 0,
                 stockVishalShop: 0,
                 lowStockThreshold: 3,
@@ -301,9 +367,11 @@ export function RecordSaleSheet({
             variant: variantLabel,
             qty: line.qty,
             unitType: line.unitType === 'Other' ? line.customUnit.trim() || undefined : line.unitType,
-            soldFor: line.soldFor,
+            soldFor: primaryAmount,
             costAtSale: costTotal,
-            currency: line.currency,
+            currency: primaryCurrency,
+            secondaryAmount,
+            secondaryCurrency,
             timestamp,
             customerNumber,
             orderNumber,
@@ -332,7 +400,7 @@ export function RecordSaleSheet({
     }
 
     setSaving(false)
-    onSaved(`Recorded ${resolved.length} item${resolved.length === 1 ? '' : 's'} — ${grandTotal}`)
+    onSaved(`Recorded ${lines.length} item${lines.length === 1 ? '' : 's'} — ${grandTotal}`)
     onClose()
   }
 
@@ -350,32 +418,232 @@ export function RecordSaleSheet({
         <Badge tone="good">#{previewNumber}</Badge>
       </div>
 
-      <div className="flex flex-col gap-4">
-        {lines.map((line, idx) => (
-          <SaleLineItem
-            key={line.key}
-            ref={(handle) => {
-              if (handle) lineHandles.current.set(line.key, handle)
-              else lineHandles.current.delete(line.key)
-            }}
-            line={line}
-            index={idx}
-            canRemove={lines.length > 1}
-            onChange={(patch) => updateLine(line.key, patch)}
-            onRemove={() => removeLine(line.key)}
-            onEnterSubmit={submit}
-            products={products}
-            variantsByProduct={variantsByProduct}
-            productStock={productStock}
-            categories={categories}
-          />
-        ))}
+      {lines.length > 0 && (
+        <div className="mb-3 flex flex-col gap-1.5">
+          {lines.map((l) => (
+            <div key={l.key} className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
+              <div className="min-w-0">
+                <div className="truncate font-medium">
+                  {l.qty} {unitLabel(l)} · {l.name}
+                </div>
+                <div className="tabular text-xs text-[var(--text-muted)]">{formatLineAmounts(l)}</div>
+              </div>
+              <button onClick={() => removeLine(l.key)} className="shrink-0 text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Remove item">
+                <TrashIcon className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
-        <Button variant="secondary" onClick={addLine} className="self-start">
-          <PlusIcon className="h-4 w-4" />
-          Add more item
-        </Button>
+      <div className="rounded-xl border border-[var(--border)] p-4">
+        {step === 'qty' && (
+          <div key={`qty-${generation}`} className="flex flex-col items-center gap-3 py-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Quantity</div>
+            <input
+              ref={qtyRef}
+              type="number"
+              inputMode="numeric"
+              min={1}
+              autoFocus
+              className="tabular w-32 rounded-xl border border-[var(--border)] bg-[var(--page-plane)] px-3 py-3 text-center text-3xl font-bold outline-none focus:border-[var(--series-1)]"
+              defaultValue={draft.qty}
+              onFocus={selectOnFocus}
+              onKeyDown={onEnterAdvance(advanceFromQty)}
+              enterKeyHint="next"
+            />
+            <Button onClick={advanceFromQty} className="w-full justify-center">Next</Button>
+          </div>
+        )}
 
+        {step === 'unit' && (
+          <div className="flex flex-col gap-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+              Unit — {draft.qty} of…
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {availableUnits.map((u) => (
+                <button
+                  key={u}
+                  type="button"
+                  onClick={() => chooseUnit(u)}
+                  className={`rounded-xl border px-2 py-3 text-sm font-semibold transition-colors ${
+                    draft.unitType === u
+                      ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
+                      : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
+                  }`}
+                >
+                  {u}
+                </button>
+              ))}
+            </div>
+            {draft.unitType === 'Other' && (
+              <div className="flex items-center gap-2">
+                <input
+                  ref={customUnitRef}
+                  className={inputClass}
+                  placeholder="Custom unit"
+                  value={draft.customUnit}
+                  onChange={(e) => setDraft((d) => ({ ...d, customUnit: e.target.value }))}
+                  onKeyDown={onEnterAdvance(() => {
+                    setStep('item')
+                    setTimeout(() => itemRef.current?.focus(), 0)
+                  })}
+                  enterKeyHint="next"
+                />
+                <Button
+                  onClick={() => {
+                    setStep('item')
+                    setTimeout(() => itemRef.current?.focus(), 0)
+                  }}
+                >
+                  Next
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === 'item' && (
+          <div className="flex flex-col gap-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+              Item — {draft.qty} {unitLabel(draft)}
+            </div>
+            <div className="flex items-center gap-2">
+              {draft.selectedProduct && <ItemThumb image={draft.selectedProduct.images[0]} size={36} />}
+              <div className="relative flex-1">
+                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+                <input
+                  ref={itemRef}
+                  className={inputClass + ' pl-9'}
+                  placeholder="Search or type a new item name"
+                  value={draft.query}
+                  onChange={(e) => setDraft((d) => ({ ...d, query: e.target.value, selectedProduct: null, selectedVariantId: null }))}
+                  onKeyDown={onEnterAdvance(confirmItem)}
+                  enterKeyHint="done"
+                />
+                {draft.query && !draft.selectedProduct && filteredProducts.length > 0 && (
+                  <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
+                    {filteredProducts.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => pickProduct(p)}
+                        className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-[var(--page-plane)]"
+                      >
+                        <ItemThumb image={p.images[0]} size={28} />
+                        <span className="flex-1">{p.name}</span>
+                        <span className="tabular text-xs text-[var(--text-muted)]">{productStock.get(p.id!) ?? 0} in stock</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={confirmItem}
+                aria-label="Confirm item"
+                title="Confirm item"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--series-1)] text-white"
+              >
+                <PlusIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            {!draft.selectedProduct && draft.query && (
+              <span className="text-xs text-[var(--text-muted)]">Not in inventory — will be added as a new item.</span>
+            )}
+
+            {draft.selectedProduct && variantsForSelected.length > 1 && (
+              <div className="flex flex-wrap gap-1.5">
+                {variantsForSelected.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    onClick={() => pickVariant(v)}
+                    className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                      draft.selectedVariantId === v.id
+                        ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
+                        : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
+                    }`}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {!draft.selectedProduct && draft.query && (
+              <input
+                ref={manualVariantRef}
+                className={inputClass}
+                placeholder='Variant / size (optional), e.g. Blue, 4"'
+                value={draft.manualVariant}
+                onChange={(e) => setDraft((d) => ({ ...d, manualVariant: e.target.value }))}
+                onKeyDown={onEnterAdvance(confirmItem)}
+                enterKeyHint="done"
+              />
+            )}
+
+            <Field label="Fulfill from">
+              <Pill
+                options={[
+                  { label: 'My Store Floor', value: 'myShop' },
+                  { label: 'Warehouse (Vishal)', value: 'vishalShop' },
+                ]}
+                value={draft.location}
+                onChange={(v) => setDraft((d) => ({ ...d, location: v }))}
+              />
+            </Field>
+          </div>
+        )}
+
+        {step === 'price' && (
+          <div className="flex flex-col gap-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+              Price — {draft.qty} {unitLabel(draft)} · {draft.selectedProduct ? draft.selectedProduct.name : draft.query}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="USD">
+                <input
+                  ref={usdRef}
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step="0.01"
+                  autoFocus
+                  className={inputClass + ' text-lg font-semibold'}
+                  placeholder="0.00"
+                  defaultValue=""
+                  onFocus={selectOnFocus}
+                  onKeyDown={onEnterAdvance(commitLine)}
+                  enterKeyHint="done"
+                />
+              </Field>
+              <Field label="LRD">
+                <input
+                  ref={lrdRef}
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step="0.01"
+                  className={inputClass + ' text-lg font-semibold'}
+                  placeholder="0.00"
+                  defaultValue=""
+                  onFocus={selectOnFocus}
+                  onKeyDown={onEnterAdvance(commitLine)}
+                  enterKeyHint="done"
+                />
+              </Field>
+            </div>
+            <p className="text-xs text-[var(--text-muted)]">Fill in either currency, or both for a split payment.</p>
+            <Button onClick={commitLine} className="w-full justify-center">
+              <PlusIcon className="h-4 w-4" />
+              Add Item
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-3">
         <Switch checked={tbs} onChange={setTbs} label="TBS — customer paid, will pick up goods later" />
       </div>
 
@@ -390,318 +658,10 @@ export function RecordSaleSheet({
           <span className="text-base font-semibold">Grand Total</span>
           <span className="tabular text-lg font-bold">{grandTotal}</span>
         </div>
-        <Button onClick={submit} disabled={saving} className="w-full justify-center">
+        <Button onClick={submit} disabled={saving || lines.length === 0} className="w-full justify-center">
           {saving ? 'Saving…' : 'Record Sale'}
         </Button>
       </div>
     </BottomSheet>
   )
 }
-
-const SaleLineItem = forwardRef<
-  LineHandle,
-  {
-    line: SaleLineState
-    index: number
-    canRemove: boolean
-    onChange: (patch: Partial<SaleLineState>) => void
-    onRemove: () => void
-    onEnterSubmit: () => void
-    products: Product[] | undefined
-    variantsByProduct: Map<number, Variant[]>
-    productStock: Map<number, number>
-    categories: Category[] | undefined
-  }
->(function SaleLineItem(
-  { line, index, canRemove, onChange, onRemove, onEnterSubmit, products, variantsByProduct, productStock, categories },
-  ref,
-) {
-  const qtyRef = useRef<HTMLInputElement>(null)
-  const customUnitRef = useRef<HTMLInputElement>(null)
-  const itemInputRef = useRef<HTMLInputElement>(null)
-  const manualVariantRef = useRef<HTMLInputElement>(null)
-  const manualCostRef = useRef<HTMLInputElement>(null)
-  const soldForRef = useRef<HTMLInputElement>(null)
-  const unitChipRefs = useRef<Record<string, HTMLButtonElement | null>>({})
-  const variantChipRefs = useRef<Record<number, HTMLButtonElement | null>>({})
-
-  useImperativeHandle(ref, () => ({
-    getLiveValues() {
-      return {
-        name: itemInputRef.current?.value ?? '',
-        qty: qtyRef.current ? Number(qtyRef.current.value) || 0 : 0,
-        soldFor: soldForRef.current ? Number(soldForRef.current.value) || 0 : 0,
-        manualVariant: manualVariantRef.current?.value ?? '',
-        manualCost: manualCostRef.current ? Number(manualCostRef.current.value) || 0 : 0,
-      }
-    },
-    focusQty() {
-      qtyRef.current?.focus()
-      qtyRef.current?.select()
-    },
-  }))
-
-  const filteredProducts = useMemo(() => {
-    if (!line.query.trim()) return (products ?? []).slice(0, 8)
-    const q = line.query.toLowerCase()
-    return (products ?? []).filter((p) => p.name.toLowerCase().includes(q)).slice(0, 8)
-  }, [products, line.query])
-
-  const variantsForSelected = line.selectedProduct ? variantsByProduct.get(line.selectedProduct.id!) ?? [] : []
-  const selectedVariant = variantsForSelected.find((v) => v.id === line.selectedVariantId) ?? null
-
-  const categoryAllowedUnits = useMemo(() => {
-    const categoryName = line.selectedProduct?.category ?? 'General'
-    const cat = (categories ?? []).find((c) => c.name === categoryName)
-    return cat?.allowedUnits && cat.allowedUnits.length > 0 ? cat.allowedUnits : null
-  }, [categories, line.selectedProduct])
-
-  const availableUnits = useMemo(() => {
-    if (!categoryAllowedUnits) return UNIT_TYPES
-    const withOther = categoryAllowedUnits.includes('Other') ? categoryAllowedUnits : [...categoryAllowedUnits, 'Other']
-    return withOther
-  }, [categoryAllowedUnits])
-
-  useEffect(() => {
-    if (!availableUnits.includes(line.unitType)) onChange({ unitType: availableUnits[0] })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [availableUnits])
-
-  function pickProduct(product: Product) {
-    const variants = variantsByProduct.get(product.id!) ?? []
-    const patch: Partial<SaleLineState> = { selectedProduct: product, query: product.name }
-    if (variants.length >= 1) {
-      const first = variants[0]
-      patch.selectedVariantId = first.id!
-      patch.currency = first.currency
-      patch.soldFor = first.sellPrice * line.qty
-    } else {
-      patch.selectedVariantId = null
-    }
-    onChange(patch)
-    setTimeout(() => {
-      if (variants.length > 1) variantChipRefs.current[variants[0].id!]?.focus()
-      else soldForRef.current?.focus()
-    }, 0)
-  }
-
-  function pickVariant(variant: Variant) {
-    onChange({ selectedVariantId: variant.id!, currency: variant.currency, soldFor: variant.sellPrice * line.qty })
-    soldForRef.current?.focus()
-  }
-
-  function changeQty(next: number) {
-    onChange({ qty: next, soldFor: selectedVariant ? selectedVariant.sellPrice * next : line.soldFor })
-  }
-
-  function chooseUnit(u: string) {
-    onChange({ unitType: u })
-    if (u === 'Other') setTimeout(() => customUnitRef.current?.focus(), 0)
-    else setTimeout(() => itemInputRef.current?.focus(), 0)
-  }
-
-  function onEnterAdvance(next: () => void) {
-    return (e: KeyboardEvent) => {
-      if (e.key === 'Enter') {
-        e.preventDefault()
-        next()
-      }
-    }
-  }
-
-  function afterItemAdvance() {
-    if (line.selectedProduct && variantsForSelected.length > 1) {
-      variantChipRefs.current[variantsForSelected[0].id!]?.focus()
-    } else if (!line.selectedProduct) {
-      manualVariantRef.current?.focus()
-    } else {
-      soldForRef.current?.focus()
-    }
-  }
-
-  const unitPrice = line.qty > 1 ? line.soldFor / line.qty : null
-
-  return (
-    <div className="flex flex-col gap-3 rounded-xl border border-[var(--border)] p-3">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-[var(--text-muted)]">Item {index + 1}</span>
-        {canRemove && (
-          <button onClick={onRemove} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Remove item">
-            <TrashIcon className="h-4 w-4" />
-          </button>
-        )}
-      </div>
-
-      <Pill
-        options={[{ label: 'USD', value: 'USD' }, { label: 'LRD', value: 'LRD' }]}
-        value={line.currency}
-        onChange={(v) => !selectedVariant && onChange({ currency: v })}
-        className={selectedVariant ? 'opacity-50' : ''}
-      />
-
-      <Field label="Fulfill from">
-        <Pill
-          options={[
-            { label: 'My Store Floor', value: 'myShop' },
-            { label: 'Warehouse (Vishal)', value: 'vishalShop' },
-          ]}
-          value={line.location}
-          onChange={(v) => onChange({ location: v })}
-        />
-      </Field>
-
-      <Field label="Quantity">
-        <input
-          ref={qtyRef}
-          type="number"
-          inputMode="numeric"
-          min={1}
-          className={inputClass}
-          value={line.qty}
-          onFocus={selectOnFocus}
-          onChange={(e) => changeQty(Number(e.target.value) || 1)}
-          onKeyDown={onEnterAdvance(() => unitChipRefs.current[line.unitType]?.focus())}
-          enterKeyHint="next"
-        />
-      </Field>
-
-      <Field label="Unit">
-        <div className="grid grid-cols-3 gap-1.5">
-          {availableUnits.map((u) => (
-            <button
-              key={u}
-              type="button"
-              ref={(el) => { unitChipRefs.current[u] = el }}
-              onClick={() => chooseUnit(u)}
-              onKeyDown={onEnterAdvance(() => chooseUnit(u))}
-              className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
-                line.unitType === u
-                  ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
-                  : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
-              }`}
-            >
-              {u}
-            </button>
-          ))}
-        </div>
-        {line.unitType === 'Other' && (
-          <input
-            ref={customUnitRef}
-            className={inputClass + ' mt-1.5'}
-            placeholder="Custom unit"
-            value={line.customUnit}
-            onChange={(e) => onChange({ customUnit: e.target.value })}
-            onKeyDown={onEnterAdvance(() => itemInputRef.current?.focus())}
-            enterKeyHint="next"
-          />
-        )}
-      </Field>
-
-      <Field label="Item">
-        <div className="relative flex items-center gap-2">
-          {line.selectedProduct && <ItemThumb image={line.selectedProduct.images[0]} size={36} />}
-          <div className="relative flex-1">
-            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-            <input
-              ref={itemInputRef}
-              className={inputClass + ' pl-9'}
-              placeholder="Search products or type a new item name"
-              value={line.query}
-              onChange={(e) => onChange({ query: e.target.value, selectedProduct: null, selectedVariantId: null })}
-              onKeyDown={onEnterAdvance(afterItemAdvance)}
-              enterKeyHint="next"
-            />
-            {line.query && !line.selectedProduct && filteredProducts.length > 0 && (
-              <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
-                {filteredProducts.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => pickProduct(p)}
-                    className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-[var(--page-plane)]"
-                  >
-                    <ItemThumb image={p.images[0]} size={28} />
-                    <span className="flex-1">{p.name}</span>
-                    <span className="tabular text-xs text-[var(--text-muted)]">{productStock.get(p.id!) ?? 0} in stock</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        {!line.selectedProduct && line.query && (
-          <span className="text-xs text-[var(--text-muted)]">Not in inventory — will be added as a new item.</span>
-        )}
-      </Field>
-
-      {line.selectedProduct && variantsForSelected.length > 1 && (
-        <Field label="Variant">
-          <div className="flex flex-wrap gap-1.5">
-            {variantsForSelected.map((v) => (
-              <button
-                key={v.id}
-                type="button"
-                ref={(el) => { variantChipRefs.current[v.id!] = el }}
-                onClick={() => pickVariant(v)}
-                onKeyDown={onEnterAdvance(() => pickVariant(v))}
-                className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                  line.selectedVariantId === v.id
-                    ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
-                    : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
-                }`}
-              >
-                {v.label} · {money(v.sellPrice, v.currency)}
-              </button>
-            ))}
-          </div>
-        </Field>
-      )}
-
-      {!line.selectedProduct && (
-        <>
-          <Field label="Variant / size (optional)">
-            <input
-              ref={manualVariantRef}
-              className={inputClass}
-              placeholder={'e.g. Blue, 4" or 3"'}
-              value={line.manualVariant}
-              onChange={(e) => onChange({ manualVariant: e.target.value })}
-              onKeyDown={onEnterAdvance(() => soldForRef.current?.focus())}
-              enterKeyHint="next"
-            />
-          </Field>
-          <Field label="Crossed Cost Price (optional)">
-            <input
-              ref={manualCostRef}
-              type="number"
-              min={0}
-              step="0.01"
-              className={inputClass}
-              value={line.manualCost}
-              onFocus={selectOnFocus}
-              onChange={(e) => onChange({ manualCost: Number(e.target.value) || 0 })}
-            />
-          </Field>
-        </>
-      )}
-
-      <Field label="Total">
-        <input
-          ref={soldForRef}
-          type="number"
-          inputMode="decimal"
-          min={0}
-          step="0.01"
-          className={inputClass}
-          value={line.soldFor}
-          onFocus={selectOnFocus}
-          onChange={(e) => onChange({ soldFor: Number(e.target.value) || 0 })}
-          onKeyDown={onEnterAdvance(onEnterSubmit)}
-          enterKeyHint="done"
-        />
-        {unitPrice != null && (
-          <span className="text-xs text-[var(--text-muted)]">Unit Price: {money(unitPrice, line.currency)}</span>
-        )}
-      </Field>
-    </div>
-  )
-})

@@ -44,6 +44,9 @@ export default function Dashboard() {
     for (const s of todaySales ?? []) {
       totals[s.currency].sales += s.soldFor
       totals[s.currency].count += 1
+      if (s.secondaryCurrency && s.secondaryAmount) {
+        totals[s.secondaryCurrency].sales += s.secondaryAmount
+      }
     }
     return totals
   }, [todaySales])
