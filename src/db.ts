@@ -52,6 +52,8 @@ export interface StockTransfer {
   createdAt: number
 }
 
+export type FulfillmentLocation = 'myShop' | 'vishalShop'
+
 export interface Sale {
   id?: number
   productId?: number
@@ -68,6 +70,7 @@ export interface Sale {
   customerNumber: number // running ticket number, never resets, never reused
   customerName?: string // optional override label if the customer is known/renamed
   orderNumber: number // one per checkout/invoice (starts at 1000), shared by every line item in that sale
+  location: FulfillmentLocation // which shop's stock this line was deducted from
   tbs: boolean // "to be shipped/picked up" — customer already paid, goods still in store
   pickedUp: boolean // for tbs sales: whether stock has actually been handed over yet
 }
@@ -302,6 +305,20 @@ db.version(9)
     })
     await tx.table('variants').toCollection().modify((variant) => {
       variant.optionValues = variant.optionValues ?? []
+    })
+  })
+
+// v10: record which shop's stock a sale line was fulfilled from, so a
+// checkout can pull from either location instead of always the main shop.
+// Every sale recorded before this defaulted to deducting from "my shop"
+// stock, so that's the correct historical value for existing rows.
+db.version(10)
+  .stores({
+    sales: '++id, productId, variantId, itemName, category, currency, timestamp, customerNumber, tbs, orderNumber, location',
+  })
+  .upgrade(async (tx) => {
+    await tx.table('sales').toCollection().modify((sale) => {
+      sale.location = sale.location ?? 'myShop'
     })
   })
 

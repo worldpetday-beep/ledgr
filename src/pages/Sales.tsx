@@ -102,7 +102,13 @@ export default function Sales() {
       const stockWasDeducted = !sale.tbs || sale.pickedUp
       if (stockWasDeducted && sale.variantId) {
         const variant = await db.variants.get(sale.variantId)
-        if (variant) await db.variants.update(sale.variantId, { stockMyShop: variant.stockMyShop + sale.qty, updatedAt: Date.now() })
+        if (variant) {
+          const updated =
+            sale.location === 'vishalShop'
+              ? { stockVishalShop: variant.stockVishalShop + sale.qty }
+              : { stockMyShop: variant.stockMyShop + sale.qty }
+          await db.variants.update(sale.variantId, { ...updated, updatedAt: Date.now() })
+        }
       }
     })
   }
@@ -112,7 +118,13 @@ export default function Sales() {
       await db.sales.update(sale.id!, { pickedUp: true })
       if (sale.variantId) {
         const variant = await db.variants.get(sale.variantId)
-        if (variant) await db.variants.update(sale.variantId, { stockMyShop: Math.max(0, variant.stockMyShop - sale.qty), updatedAt: Date.now() })
+        if (variant) {
+          const updated =
+            sale.location === 'vishalShop'
+              ? { stockVishalShop: Math.max(0, variant.stockVishalShop - sale.qty) }
+              : { stockMyShop: Math.max(0, variant.stockMyShop - sale.qty) }
+          await db.variants.update(sale.variantId, { ...updated, updatedAt: Date.now() })
+        }
       }
     })
   }
@@ -238,7 +250,8 @@ export default function Sales() {
                                 <div className="tabular text-xs text-gray-500">
                                   {line.variant && `${line.variant} · `}
                                   {line.qty}
-                                  {line.unitType && ` ${line.unitType}`} · {money(line.soldFor, line.currency)}
+                                  {line.unitType && ` ${line.unitType}`} · {money(line.soldFor, line.currency)} ·{' '}
+                                  {line.location === 'vishalShop' ? 'Warehouse (Vishal)' : 'Store floor'}
                                 </div>
                               </div>
                               <div className="flex shrink-0 items-center gap-2">

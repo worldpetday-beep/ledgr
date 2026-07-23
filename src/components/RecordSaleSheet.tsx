@@ -19,6 +19,7 @@ import {
   type Category,
   type Product,
   type Variant,
+  type FulfillmentLocation,
 } from '../db'
 import { BottomSheet, Button, Field, inputClass, Badge, Pill, Switch } from './ui'
 import { ItemThumb } from './ItemThumb'
@@ -37,9 +38,10 @@ interface SaleLineState {
   soldFor: number
   currency: Currency
   manualCost: number
+  location: FulfillmentLocation
 }
 
-function blankLine(currency: Currency = 'USD'): SaleLineState {
+function blankLine(currency: Currency = 'USD', location: FulfillmentLocation = 'myShop'): SaleLineState {
   return {
     key: `line-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     query: '',
@@ -52,6 +54,7 @@ function blankLine(currency: Currency = 'USD'): SaleLineState {
     soldFor: 0,
     currency,
     manualCost: 0,
+    location,
   }
 }
 
@@ -125,7 +128,7 @@ export function RecordSaleSheet({
   const productStock = useMemo(() => {
     const map = new Map<number, number>()
     for (const [productId, list] of variantsByProduct.entries()) {
-      map.set(productId, list.reduce((sum, v) => sum + v.stockMyShop, 0))
+      map.set(productId, list.reduce((sum, v) => sum + v.stockMyShop + v.stockVishalShop, 0))
     }
     return map
   }, [variantsByProduct])
@@ -152,7 +155,8 @@ export function RecordSaleSheet({
 
   function addLine() {
     const lastCurrency = lines[lines.length - 1]?.currency ?? 'USD'
-    const newLine = blankLine(lastCurrency)
+    const lastLocation = lines[lines.length - 1]?.location ?? 'myShop'
+    const newLine = blankLine(lastCurrency, lastLocation)
     setLines((prev) => [...prev, newLine])
     setTimeout(() => lineHandles.current.get(newLine.key)?.focusQty(), 50)
   }
@@ -303,6 +307,7 @@ export function RecordSaleSheet({
             timestamp,
             customerNumber,
             orderNumber,
+            location: line.location,
             tbs,
             pickedUp: !tbs,
           })
@@ -310,10 +315,11 @@ export function RecordSaleSheet({
           if (!tbs && variantId) {
             const fresh = await db.variants.get(variantId)
             if (fresh) {
-              await db.variants.update(variantId, {
-                stockMyShop: Math.max(0, fresh.stockMyShop - line.qty),
-                updatedAt: Date.now(),
-              })
+              const updated =
+                line.location === 'vishalShop'
+                  ? { stockVishalShop: Math.max(0, fresh.stockVishalShop - line.qty) }
+                  : { stockMyShop: Math.max(0, fresh.stockMyShop - line.qty) }
+              await db.variants.update(variantId, { ...updated, updatedAt: Date.now() })
             }
           }
         }
@@ -532,6 +538,17 @@ const SaleLineItem = forwardRef<
         onChange={(v) => !selectedVariant && onChange({ currency: v })}
         className={selectedVariant ? 'opacity-50' : ''}
       />
+
+      <Field label="Fulfill from">
+        <Pill
+          options={[
+            { label: 'My Store Floor', value: 'myShop' },
+            { label: 'Warehouse (Vishal)', value: 'vishalShop' },
+          ]}
+          value={line.location}
+          onChange={(v) => onChange({ location: v })}
+        />
+      </Field>
 
       <Field label="Quantity">
         <input
