@@ -6,7 +6,7 @@ import { PlusIcon, EditIcon, SearchIcon, MoreVerticalIcon, BoxesIcon, BookIcon }
 import { DaybookRow } from '../components/DaybookRow'
 import { BookTabView } from '../components/BookTab'
 import { WarehouseLedgerView } from '../components/WarehouseLedger'
-import { EditSaleSheet } from '../components/EditSaleSheet'
+import { InvoicePopup } from '../components/InvoicePopup'
 import { BottomSheet, Field } from '../components/ui'
 import { useAppActions } from '../context/AppActions'
 import { money, dateKeyMonrovia, formatDateMonrovia, formatTimeMonrovia, selectOnFocus } from '../lib/format'
@@ -25,7 +25,7 @@ interface OrderGroup {
 
 function statusBadge(text: string, tone: 'muted' | 'warning' | 'good') {
   const styles: Record<string, string> = {
-    muted: 'bg-gray-100 text-gray-600',
+    muted: 'bg-slate-100 text-slate-600',
     warning: 'bg-amber-100 text-amber-700',
     good: 'bg-green-100 text-green-700',
   }
@@ -123,7 +123,25 @@ export default function Sales() {
     setEodNote('')
   }
 
-  const [editingSale, setEditingSale] = useState<Sale | null>(null)
+  // Only the selected order NUMBER is kept in state — the order data itself
+  // is looked up live from `orders` on every render, so edits made inside
+  // the invoice popup (qty/price/etc.) are reflected immediately in its own
+  // totals instead of showing a stale snapshot from when it was opened.
+  const [invoiceOrderNumber, setInvoiceOrderNumber] = useState<number | null>(null)
+  const invoiceOrder = useMemo(
+    () => (invoiceOrderNumber != null ? orders.find((o) => o.orderNumber === invoiceOrderNumber) ?? null : null),
+    [orders, invoiceOrderNumber],
+  )
+
+  // Daily sequential index (1 = the day's first order, chronologically) —
+  // independent of the persisted, never-resetting order/ticket number, used
+  // only for the invoice's "#N" display and default customer label.
+  const dailyIndexByOrder = useMemo(() => {
+    const chronological = [...orders].sort((a, b) => a.timestamp - b.timestamp)
+    const map = new Map<number, number>()
+    chronological.forEach((o, i) => map.set(o.orderNumber, i + 1))
+    return map
+  }, [orders])
 
   function startEdit(order: OrderGroup) {
     setEditingOrderNumber(order.orderNumber)
@@ -154,9 +172,9 @@ export default function Sales() {
         </>
       }
     >
-      <div className="flex flex-col gap-4">
+      <div className="flex max-w-full flex-col gap-4 overflow-x-hidden" style={{ boxSizing: 'border-box' }}>
         <div className="relative">
-          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             className={shopifyInputClass + ' pl-9'}
             placeholder="Search today's orders, items, or customers"
@@ -173,7 +191,7 @@ export default function Sales() {
           ))}
         </div>
 
-        <div className="px-1 text-xs font-semibold text-gray-500">{formatDateMonrovia(Date.now())} — today's ledger</div>
+        <div className="px-1 text-xs font-semibold text-slate-500">{formatDateMonrovia(Date.now())} — today's ledger</div>
 
         <div className="flex flex-col gap-3">
           {filteredOrders.map((order) => {
@@ -185,8 +203,8 @@ export default function Sales() {
             return (
               <div key={order.orderNumber} className={shopifyCardClass}>
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-1 text-sm text-gray-500">
-                    <span className="shrink-0 font-semibold text-black">#{order.orderNumber}</span>
+                  <div className="flex min-w-0 items-center gap-1 text-sm text-slate-500">
+                    <span className="shrink-0 font-semibold text-slate-900">#{order.orderNumber}</span>
                     {editingOrderNumber === order.orderNumber ? (
                       <input
                         autoFocus
@@ -199,31 +217,31 @@ export default function Sales() {
                       />
                     ) : (
                       <>
-                        <span className="shrink-0 truncate">· {label}</span>
-                        <button onClick={() => startEdit(order)} className="shrink-0 text-gray-400 hover:text-black" aria-label="Rename customer">
+                        <span className="min-w-0 truncate">· {label}</span>
+                        <button onClick={() => startEdit(order)} className="shrink-0 text-slate-400 hover:text-slate-900" aria-label="Rename customer">
                           <EditIcon className="h-3 w-3" />
                         </button>
                       </>
                     )}
                   </div>
-                  <div className="shrink-0 text-xs text-gray-400">{formatTimeMonrovia(order.timestamp)}</div>
+                  <div className="shrink-0 text-xs text-slate-400">{formatTimeMonrovia(order.timestamp)}</div>
                 </div>
 
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   {!order.anyTbs && statusBadge('Delivered', 'muted')}
                   {anyPendingPickup && statusBadge('TBS — awaiting pickup', 'warning')}
                   {anyPickedUp && !anyPendingPickup && statusBadge('Picked up', 'good')}
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-slate-400">
                     {itemCount} item{itemCount === 1 ? '' : 's'}
                   </span>
                 </div>
 
-                <div className="mt-1.5 divide-y divide-gray-100">
+                <div className="mt-1.5 divide-y divide-slate-100">
                   {order.lines.map((line) => (
                     <DaybookRow
                       key={line.id}
                       sale={line}
-                      onEdit={() => setEditingSale(line)}
+                      onEdit={() => setInvoiceOrderNumber(order.orderNumber)}
                       onDelete={() => deleteSaleLine(line)}
                       onMarkPickedUp={() => markSalePickedUp(line)}
                     />
@@ -234,7 +252,7 @@ export default function Sales() {
           })}
           {filteredOrders.length === 0 && (
             <div className={shopifyCardClass}>
-              <p className="py-8 text-center text-sm text-gray-500">
+              <p className="py-8 text-center text-sm text-slate-500">
                 No sales recorded today yet. Tap the + above to add your first one.
               </p>
             </div>
@@ -242,18 +260,18 @@ export default function Sales() {
         </div>
 
         <div className={shopifyCardClass}>
-          <h2 className="mb-3 text-sm font-semibold text-black">End-of-day balance</h2>
+          <h2 className="mb-3 text-sm font-semibold text-slate-900">End-of-day balance</h2>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-            <div className="text-gray-500">Ledger sales — USD</div>
-            <div className="tabular text-right font-semibold text-black">{money(ledgerSumUsd, 'USD')}</div>
-            <div className="text-gray-500">Ledger sales — LRD</div>
-            <div className="tabular text-right font-semibold text-black">{money(ledgerSumLrd, 'LRD')}</div>
+            <div className="text-slate-500">Ledger sales — USD</div>
+            <div className="tabular text-right font-semibold text-slate-900">{money(ledgerSumUsd, 'USD')}</div>
+            <div className="text-slate-500">Ledger sales — LRD</div>
+            <div className="tabular text-right font-semibold text-slate-900">{money(ledgerSumLrd, 'LRD')}</div>
           </div>
 
-          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-gray-100 pt-2 text-sm">
-            <div className="text-gray-500">Net profit — USD</div>
+          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-slate-100 pt-2 text-sm">
+            <div className="text-slate-500">Net profit — USD</div>
             <div className="tabular text-right font-semibold text-green-700">{money(netProfitUsd, 'USD')}</div>
-            <div className="text-gray-500">Net profit — LRD</div>
+            <div className="text-slate-500">Net profit — LRD</div>
             <div className="tabular text-right font-semibold text-green-700">{money(netProfitLrd, 'LRD')}</div>
           </div>
 
@@ -307,15 +325,15 @@ export default function Sales() {
             </Field>
           </div>
 
-          <div className="mt-3 border-t border-gray-100 pt-3">
+          <div className="mt-3 border-t border-slate-100 pt-3">
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-              <div className="text-gray-500">Final hand cash — USD</div>
-              <div className="tabular text-right text-base font-bold text-black">{money(finalHandCashUsd, 'USD')}</div>
-              <div className="text-gray-500">Final hand cash — LRD</div>
-              <div className="tabular text-right text-base font-bold text-black">{money(finalHandCashLrd, 'LRD')}</div>
+              <div className="text-slate-500">Final hand cash — USD</div>
+              <div className="tabular text-right text-base font-bold text-slate-900">{money(finalHandCashUsd, 'USD')}</div>
+              <div className="text-slate-500">Final hand cash — LRD</div>
+              <div className="tabular text-right text-base font-bold text-slate-900">{money(finalHandCashLrd, 'LRD')}</div>
             </div>
             {yesterdayClose && (
-              <p className="mt-2 text-xs text-gray-400">
+              <p className="mt-2 text-xs text-slate-400">
                 Carries forward {money(yesterdayClose.usdActual, 'USD')} + {money(yesterdayClose.lrdActual, 'LRD')} counted on{' '}
                 {formatDateMonrovia(yesterdayClose.timestamp)}.
               </p>
@@ -334,17 +352,17 @@ export default function Sales() {
         </div>
       </div>
 
-      <BottomSheet open={moreMenuOpen} onClose={() => setMoreMenuOpen(false)} contentClassName="!bg-white !text-black">
+      <BottomSheet open={moreMenuOpen} onClose={() => setMoreMenuOpen(false)} contentClassName="!bg-white !text-slate-900">
         <div className="flex flex-col gap-1 pt-2">
-          <h2 className="px-1 pb-2 text-sm font-semibold text-gray-500">More options</h2>
+          <h2 className="px-1 pb-2 text-sm font-semibold text-slate-500">More options</h2>
           <button
             onClick={() => {
               setMoreMenuOpen(false)
               setBookTabOpen(true)
             }}
-            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-slate-900 hover:bg-slate-50"
           >
-            <BookIcon className="h-5 w-5 text-gray-500" />
+            <BookIcon className="h-5 w-5 text-slate-500" />
             Book Tab — daily archive
           </button>
           <button
@@ -352,9 +370,9 @@ export default function Sales() {
               setMoreMenuOpen(false)
               setWarehouseLedgerOpen(true)
             }}
-            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-slate-900 hover:bg-slate-50"
           >
-            <BoxesIcon className="h-5 w-5 text-gray-500" />
+            <BoxesIcon className="h-5 w-5 text-slate-500" />
             Warehouse Ledger
           </button>
         </div>
@@ -362,7 +380,11 @@ export default function Sales() {
 
       {bookTabOpen && <BookTabView onClose={() => setBookTabOpen(false)} />}
       {warehouseLedgerOpen && <WarehouseLedgerView onClose={() => setWarehouseLedgerOpen(false)} />}
-      <EditSaleSheet sale={editingSale} onClose={() => setEditingSale(null)} />
+      <InvoicePopup
+        order={invoiceOrder}
+        dailyIndex={invoiceOrder ? dailyIndexByOrder.get(invoiceOrder.orderNumber) ?? 1 : 1}
+        onClose={() => setInvoiceOrderNumber(null)}
+      />
     </ShopifyShell>
   )
 }

@@ -63,6 +63,7 @@ export interface SaleEditPatch {
   usdAmount: number
   lrdAmount: number
   location: FulfillmentLocation
+  itemName?: string
 }
 
 // Edits an already-recorded sale line's qty/unit/price/location. Stock is
@@ -104,6 +105,7 @@ export async function editSaleLine(sale: Sale, patch: SaleEditPatch): Promise<vo
       secondaryAmount: hasSecondary ? patch.lrdAmount : undefined,
       secondaryCurrency: hasSecondary ? 'LRD' : undefined,
       location: patch.location,
+      ...(patch.itemName !== undefined ? { itemName: patch.itemName } : {}),
     })
   })
 }

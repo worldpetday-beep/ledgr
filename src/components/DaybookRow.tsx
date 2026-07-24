@@ -34,28 +34,28 @@ export function DaybookRow({
           {sale.qty}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium text-black">
+          <div className="truncate text-sm font-medium text-slate-900">
             {sale.itemName}
             {sale.variant ? ` — ${sale.variant}` : ''}
           </div>
-          <div className="truncate text-xs text-gray-400">
+          <div className="truncate text-xs text-slate-400">
             {sale.unitType ? `${sale.unitType} · ` : ''}
             {sale.location === 'vishalShop' ? 'Warehouse (Vishal)' : 'Store floor'}
             {sale.tbs ? ` · ${sale.pickedUp ? 'Picked up' : 'TBS'}` : ''}
           </div>
         </div>
-        <div className="tabular w-20 shrink-0 text-right text-sm text-gray-700">{lrd > 0 ? money(lrd, 'LRD') : ''}</div>
-        <div className="tabular w-20 shrink-0 text-right text-sm font-semibold text-black">{usd > 0 ? money(usd, 'USD') : ''}</div>
+        <div className="tabular w-20 shrink-0 text-right text-sm text-slate-700">{lrd > 0 ? money(lrd, 'LRD') : ''}</div>
+        <div className="tabular w-20 shrink-0 text-right text-sm font-semibold text-slate-900">{usd > 0 ? money(usd, 'USD') : ''}</div>
       </button>
       {(onDelete || onMarkPickedUp) && (
         <div className="flex shrink-0 items-center gap-1.5">
           {sale.tbs && !sale.pickedUp && onMarkPickedUp && (
-            <button onClick={onMarkPickedUp} className="whitespace-nowrap text-xs font-medium text-black hover:underline">
+            <button onClick={onMarkPickedUp} className="whitespace-nowrap text-xs font-medium text-slate-900 hover:underline">
               Picked up
             </button>
           )}
           {onDelete && (
-            <button onClick={onDelete} aria-label="Delete item" className="text-gray-400 hover:text-red-600">
+            <button onClick={onDelete} aria-label="Delete item" className="text-slate-400 hover:text-red-600">
               <TrashIcon className="h-4 w-4" />
             </button>
           )}

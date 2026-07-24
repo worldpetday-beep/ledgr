@@ -10,6 +10,7 @@ import { deleteSaleLine, editSaleLine, lrdAmountOf, usdAmountOf } from '../lib/s
 // Tab's archived-day view, so a data-entry mistake can be fixed no matter
 // when it happened.
 export function EditSaleSheet({ sale, onClose }: { sale: Sale | null; onClose: () => void }) {
+  const [itemName, setItemName] = useState('')
   const [qty, setQty] = useState(1)
   const [unitType, setUnitType] = useState('Piece')
   const [customUnit, setCustomUnit] = useState('')
@@ -20,6 +21,7 @@ export function EditSaleSheet({ sale, onClose }: { sale: Sale | null; onClose: (
 
   useEffect(() => {
     if (!sale) return
+    setItemName(sale.itemName)
     setQty(sale.qty)
     const knownUnit = !!sale.unitType && UNIT_TYPES.includes(sale.unitType)
     setUnitType(knownUnit ? sale.unitType! : sale.unitType ? 'Other' : 'Piece')
@@ -40,6 +42,7 @@ export function EditSaleSheet({ sale, onClose }: { sale: Sale | null; onClose: (
       usdAmount: Number(usdAmount) || 0,
       lrdAmount: Number(lrdAmount) || 0,
       location,
+      itemName: itemName.trim() || sale.itemName,
     })
     setSaving(false)
     onClose()
@@ -61,6 +64,10 @@ export function EditSaleSheet({ sale, onClose }: { sale: Sale | null; onClose: (
             Edit — {sale.itemName}
             {sale.variant ? ` — ${sale.variant}` : ''}
           </h2>
+
+          <Field label="Item name">
+            <input className={inputClass} value={itemName} onChange={(e) => setItemName(e.target.value)} />
+          </Field>
 
           <Field label="Quantity">
             <input
