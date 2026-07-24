@@ -98,6 +98,27 @@ export interface DrawerCount {
   usdActual: number
   lrdActual: number
   note?: string
+  // End-of-day balancing widget (Sales tab): money paid out of the drawer
+  // that day (e.g. sent to Vishal, personal draws) -- absent for older
+  // counts logged before this existed, or ones logged without an EOD close.
+  outboundUsd?: number
+  outboundLrd?: number
+}
+
+export type WarehouseLedgerDirection = 'in' | 'out' // in = received from source; out = sent to source
+
+// A purely informational log of stock moving to/from external depots (e.g.
+// Vishal Store, or other custom sources). Deliberately NOT linked to
+// Variant.stockMyShop/stockVishalShop -- it never touches real inventory
+// counts, unlike the Warehouse Book transfer feature in Inventory.
+export interface WarehouseLedgerEntry {
+  id?: number
+  timestamp: number
+  source: string // e.g. "Vishal Store", or a custom source name
+  direction: WarehouseLedgerDirection
+  description: string // free text, e.g. "12 bags cement"
+  qty?: number
+  note?: string
 }
 
 export const db = new Dexie('LedgrDB') as Dexie & {
@@ -108,6 +129,7 @@ export const db = new Dexie('LedgrDB') as Dexie & {
   settings: EntityTable<Setting, 'key'>
   drawerCounts: EntityTable<DrawerCount, 'id'>
   stockTransfers: EntityTable<StockTransfer, 'id'>
+  warehouseLedger: EntityTable<WarehouseLedgerEntry, 'id'>
 }
 
 db.version(1).stores({
@@ -328,8 +350,17 @@ db.version(10)
     })
   })
 
+// v11: new Warehouse Ledger table -- a purely informational journal of stock
+// moving to/from external depots, separate from the real two-location stock
+// transfer feature already in Inventory.
+db.version(11).stores({
+  warehouseLedger: '++id, timestamp, source, direction',
+})
+
 export const NEXT_ORDER_NUMBER_KEY = 'nextOrderNumber'
 export const ORDER_NUMBER_BASE = 1000
+export const WAREHOUSE_SOURCES_KEY = 'warehouseSources'
+export const DEFAULT_WAREHOUSE_SOURCES = ['Vishal Store']
 
 // Reserves and returns the next order number for a whole invoice (shared by
 // every line item submitted together), starting at ORDER_NUMBER_BASE and
@@ -340,6 +371,24 @@ export async function reserveNextOrderNumber(): Promise<number> {
     const current = row ? parseInt(row.value, 10) : ORDER_NUMBER_BASE
     await db.settings.put({ key: NEXT_ORDER_NUMBER_KEY, value: String(current + 1) })
     return current
+  })
+}
+
+// If the order being freed was the single most-recently-issued number (and no
+// sale rows still reference it), roll the counter back so the very next sale
+// reuses that exact number instead of leaving a permanent gap. Deleting an
+// older/historical order never renumbers anything -- only the latest one is
+// recyclable, matching a physical ledger where you'd cross out and reuse the
+// last line, not renumber everything above it.
+export async function releaseOrderNumberIfLatest(orderNumber: number): Promise<void> {
+  return db.transaction('rw', db.settings, db.sales, async () => {
+    const row = await db.settings.get(NEXT_ORDER_NUMBER_KEY)
+    const nextToIssue = row ? parseInt(row.value, 10) : ORDER_NUMBER_BASE
+    if (orderNumber !== nextToIssue - 1) return
+    const stillReferenced = await db.sales.where('orderNumber').equals(orderNumber).count()
+    if (stillReferenced === 0) {
+      await db.settings.put({ key: NEXT_ORDER_NUMBER_KEY, value: String(orderNumber) })
+    }
   })
 }
 
