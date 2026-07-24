@@ -160,6 +160,15 @@ export function ChevronRightIcon({ className }: IconProps) {
   )
 }
 
+export function CheckSquareIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <path d="M7.5 12l3 3 6-6" />
+    </svg>
+  )
+}
+
 export function BookIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>

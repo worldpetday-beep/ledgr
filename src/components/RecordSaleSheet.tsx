@@ -15,17 +15,17 @@ import {
 } from '../db'
 import { BottomSheet, Button, Field, inputClass, Badge, Pill, Switch } from './ui'
 import { ItemThumb } from './ItemThumb'
-import { SearchIcon, PlusIcon, TrashIcon } from './icons'
+import { SearchIcon, PlusIcon, TrashIcon, ChevronLeftIcon, ChevronRightIcon } from './icons'
 import { money, selectOnFocus } from '../lib/format'
 
 type Step = 'qty' | 'unit' | 'item' | 'price'
+const STEP_ORDER: Step[] = ['qty', 'unit', 'item', 'price']
 
 interface CommittedLine {
   key: string
   name: string
   selectedProduct: Product | null
   selectedVariantId: number | null
-  manualVariant: string
   qty: number
   unitType: string
   customUnit: string
@@ -41,7 +41,6 @@ interface DraftLine {
   query: string
   selectedProduct: Product | null
   selectedVariantId: number | null
-  manualVariant: string
   location: FulfillmentLocation
 }
 
@@ -53,9 +52,15 @@ function blankDraft(location: FulfillmentLocation = 'myShop'): DraftLine {
     query: '',
     selectedProduct: null,
     selectedVariantId: null,
-    manualVariant: '',
     location,
   }
+}
+
+interface ItemSuggestion {
+  key: string
+  product: Product
+  variant: Variant | null
+  label: string
 }
 
 function unitLabel(line: { unitType: string; customUnit: string }): string {
@@ -94,11 +99,11 @@ export function RecordSaleSheet({
   const [tbs, setTbs] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   const qtyRef = useRef<HTMLInputElement>(null)
   const customUnitRef = useRef<HTMLInputElement>(null)
   const itemRef = useRef<HTMLInputElement>(null)
-  const manualVariantRef = useRef<HTMLInputElement>(null)
   const usdRef = useRef<HTMLInputElement>(null)
   const lrdRef = useRef<HTMLInputElement>(null)
 
@@ -137,13 +142,31 @@ export function RecordSaleSheet({
     return categoryAllowedUnits.includes('Other') ? categoryAllowedUnits : [...categoryAllowedUnits, 'Other']
   }, [categoryAllowedUnits])
 
-  const filteredProducts = useMemo(() => {
-    if (!draft.query.trim()) return (products ?? []).slice(0, 6)
-    const q = draft.query.toLowerCase()
-    return (products ?? []).filter((p) => p.name.toLowerCase().includes(q)).slice(0, 6)
-  }, [products, draft.query])
-
-  const variantsForSelected = draft.selectedProduct ? variantsByProduct.get(draft.selectedProduct.id!) ?? [] : []
+  // A single, continuous free-text suggestion list: every variant of every
+  // product renders as one full descriptor ("Mattress — 4\" Star Special
+  // Double") so picking a match resolves the exact product+variant in one
+  // tap, without a separate variant-chip step. Matches on the combined text
+  // (and product name alone) so "historical" phrasing surfaces naturally.
+  const itemSuggestions = useMemo<ItemSuggestion[]>(() => {
+    const q = draft.query.trim().toLowerCase()
+    const results: ItemSuggestion[] = []
+    for (const p of products ?? []) {
+      const variants = variantsByProduct.get(p.id!) ?? []
+      if (variants.length <= 1) {
+        const v = variants[0] ?? null
+        const label = v && v.label !== 'Standard' ? `${p.name} — ${v.label}` : p.name
+        if (!q || label.toLowerCase().includes(q)) results.push({ key: `${p.id}-${v?.id ?? 'none'}`, product: p, variant: v, label })
+      } else {
+        for (const v of variants) {
+          const label = `${p.name} — ${v.label}`
+          if (!q || label.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)) {
+            results.push({ key: `${p.id}-${v.id}`, product: p, variant: v, label })
+          }
+        }
+      }
+    }
+    return results.slice(0, 8)
+  }, [products, variantsByProduct, draft.query])
 
   // Reset the whole sheet each time it's opened fresh.
   useEffect(() => {
@@ -156,6 +179,7 @@ export function RecordSaleSheet({
       setTbs(false)
       setSaveError(null)
       setSaving(false)
+      setConfirmOpen(false)
     }
   }, [open])
 
@@ -164,6 +188,57 @@ export function RecordSaleSheet({
     setStep('qty')
     setGeneration((g) => g + 1)
   }
+
+  function goBackStep() {
+    const idx = STEP_ORDER.indexOf(step)
+    if (idx > 0) setStep(STEP_ORDER[idx - 1])
+    else onClose()
+  }
+
+  function goNextStep() {
+    if (step === 'qty') advanceFromQty()
+    else if (step === 'unit') chooseUnit(draft.unitType)
+    else if (step === 'item') confirmItem()
+    else commitLine()
+  }
+
+  // Make the phone's/browser's back button (hardware key or on-screen
+  // gesture) step backward through the wizard exactly like the on-screen
+  // Back arrow, instead of leaving the app. We reserve exactly one history
+  // entry for the whole sheet lifetime: a "back" mid-wizard re-pushes it and
+  // moves one step back; a "back" from the very first step lets the real
+  // navigation happen, which closes the sheet.
+  const stepRef = useRef(step)
+  useEffect(() => {
+    stepRef.current = step
+  }, [step])
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
+  useEffect(() => {
+    if (!open) return
+    window.history.pushState({ ledgrRecordSale: true }, '')
+    let pushed = true
+
+    function onPopState() {
+      const idx = STEP_ORDER.indexOf(stepRef.current)
+      if (idx > 0) {
+        window.history.pushState({ ledgrRecordSale: true }, '')
+        setStep(STEP_ORDER[idx - 1])
+      } else {
+        pushed = false
+        onCloseRef.current()
+      }
+    }
+
+    window.addEventListener('popstate', onPopState)
+    return () => {
+      window.removeEventListener('popstate', onPopState)
+      if (pushed) window.history.back()
+    }
+  }, [open])
 
   function advanceFromQty() {
     const val = Number(qtyRef.current?.value) || 0
@@ -186,14 +261,12 @@ export function RecordSaleSheet({
     setTimeout(() => itemRef.current?.focus(), 0)
   }
 
-  function pickProduct(p: Product) {
-    const variants = variantsByProduct.get(p.id!) ?? []
-    setDraft((d) => ({ ...d, selectedProduct: p, query: p.name, selectedVariantId: variants[0]?.id ?? null }))
-    if (variants.length <= 1) setStep('price')
-  }
-
-  function pickVariant(v: Variant) {
-    setDraft((d) => ({ ...d, selectedVariantId: v.id! }))
+  // Selecting a suggestion ONLY resolves which product/variant + fills the
+  // text field — it must never touch price or currency, so a re-sold item
+  // never carries over a stale historical price (counter bargaining means
+  // the price is different every time).
+  function pickSuggestion(s: ItemSuggestion) {
+    setDraft((d) => ({ ...d, selectedProduct: s.product, selectedVariantId: s.variant?.id ?? null, query: s.label }))
     setStep('price')
   }
 
@@ -201,10 +274,6 @@ export function RecordSaleSheet({
     const name = draft.selectedProduct ? draft.selectedProduct.name : draft.query.trim()
     if (!name) {
       setSaveError('Enter an item name or pick one from the list.')
-      return
-    }
-    if (draft.selectedProduct && variantsForSelected.length > 1 && !draft.selectedVariantId) {
-      setSaveError('Pick a variant for this item.')
       return
     }
     setSaveError(null)
@@ -226,7 +295,6 @@ export function RecordSaleSheet({
         name,
         selectedProduct: draft.selectedProduct,
         selectedVariantId: draft.selectedVariantId,
-        manualVariant: draft.manualVariant,
         qty: draft.qty,
         unitType: draft.unitType,
         customUnit: draft.customUnit,
@@ -301,16 +369,16 @@ export function RecordSaleSheet({
               const existingVariants = (await db.variants.where('productId').equals(existingProduct.id!).toArray()).sort(
                 (a, b) => a.order - b.order,
               )
-              const label = line.manualVariant.trim() || (existingVariants.length === 0 ? 'Standard' : '')
+              const label = existingVariants.length === 0 ? 'Standard' : ''
               const matching = label ? existingVariants.find((v) => v.label.toLowerCase() === label.toLowerCase()) : undefined
               if (matching) {
                 variantId = matching.id
                 variantLabel = matching.label
-              } else if (existingVariants.length === 1 && !line.manualVariant.trim()) {
+              } else if (existingVariants.length === 1) {
                 variantId = existingVariants[0].id
                 variantLabel = existingVariants[0].label
               } else {
-                const newLabel = line.manualVariant.trim() || 'Standard'
+                const newLabel = 'Standard'
                 variantId = await db.variants.add({
                   productId: existingProduct.id!,
                   label: newLabel,
@@ -340,7 +408,7 @@ export function RecordSaleSheet({
                 updatedAt: now,
               })) as number
               productCategory = 'General'
-              variantLabel = line.manualVariant.trim() || 'Standard'
+              variantLabel = 'Standard'
               variantId = await db.variants.add({
                 productId,
                 label: variantLabel,
@@ -437,9 +505,23 @@ export function RecordSaleSheet({
       )}
 
       <div className="rounded-xl border border-[var(--border)] p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <button onClick={goBackStep} aria-label="Back" title="Back" className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-muted)] hover:bg-[var(--page-plane)]">
+            <ChevronLeftIcon className="h-5 w-5" />
+          </button>
+          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+            {step === 'qty' && 'Quantity'}
+            {step === 'unit' && `Unit — ${draft.qty} of…`}
+            {step === 'item' && `Item — ${draft.qty} ${unitLabel(draft)}`}
+            {step === 'price' && `Price — ${draft.qty} ${unitLabel(draft)} · ${draft.selectedProduct ? draft.selectedProduct.name : draft.query}`}
+          </span>
+          <button onClick={goNextStep} aria-label="Next" title="Next" className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--series-1)] hover:bg-[var(--page-plane)]">
+            <ChevronRightIcon className="h-5 w-5" />
+          </button>
+        </div>
+
         {step === 'qty' && (
           <div key={`qty-${generation}`} className="flex flex-col items-center gap-3 py-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Quantity</div>
             <input
               ref={qtyRef}
               type="number"
@@ -458,9 +540,6 @@ export function RecordSaleSheet({
 
         {step === 'unit' && (
           <div className="flex flex-col gap-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-              Unit — {draft.qty} of…
-            </div>
             <div className="grid grid-cols-3 gap-2">
               {availableUnits.map((u) => (
                 <button
@@ -506,9 +585,6 @@ export function RecordSaleSheet({
 
         {step === 'item' && (
           <div className="flex flex-col gap-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-              Item — {draft.qty} {unitLabel(draft)}
-            </div>
             <div className="flex items-center gap-2">
               {draft.selectedProduct && <ItemThumb image={draft.selectedProduct.images[0]} size={36} />}
               <div className="relative flex-1">
@@ -522,17 +598,19 @@ export function RecordSaleSheet({
                   onKeyDown={onEnterAdvance(confirmItem)}
                   enterKeyHint="done"
                 />
-                {draft.query && !draft.selectedProduct && filteredProducts.length > 0 && (
+                {draft.query && !draft.selectedProduct && itemSuggestions.length > 0 && (
                   <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
-                    {filteredProducts.map((p) => (
+                    {itemSuggestions.map((s) => (
                       <button
-                        key={p.id}
-                        onClick={() => pickProduct(p)}
+                        key={s.key}
+                        onClick={() => pickSuggestion(s)}
                         className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-[var(--page-plane)]"
                       >
-                        <ItemThumb image={p.images[0]} size={28} />
-                        <span className="flex-1">{p.name}</span>
-                        <span className="tabular text-xs text-[var(--text-muted)]">{productStock.get(p.id!) ?? 0} in stock</span>
+                        <ItemThumb image={s.product.images[0]} size={28} />
+                        <span className="flex-1 truncate">{s.label}</span>
+                        <span className="tabular text-xs text-[var(--text-muted)]">
+                          {(s.variant ? s.variant.stockMyShop + s.variant.stockVishalShop : productStock.get(s.product.id!)) ?? 0} in stock
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -552,37 +630,6 @@ export function RecordSaleSheet({
               <span className="text-xs text-[var(--text-muted)]">Not in inventory — will be added as a new item.</span>
             )}
 
-            {draft.selectedProduct && variantsForSelected.length > 1 && (
-              <div className="flex flex-wrap gap-1.5">
-                {variantsForSelected.map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    onClick={() => pickVariant(v)}
-                    className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                      draft.selectedVariantId === v.id
-                        ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
-                        : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
-                    }`}
-                  >
-                    {v.label}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {!draft.selectedProduct && draft.query && (
-              <input
-                ref={manualVariantRef}
-                className={inputClass}
-                placeholder='Variant / size (optional), e.g. Blue, 4"'
-                value={draft.manualVariant}
-                onChange={(e) => setDraft((d) => ({ ...d, manualVariant: e.target.value }))}
-                onKeyDown={onEnterAdvance(confirmItem)}
-                enterKeyHint="done"
-              />
-            )}
-
             <Field label="Fulfill from">
               <Pill
                 options={[
@@ -598,9 +645,6 @@ export function RecordSaleSheet({
 
         {step === 'price' && (
           <div className="flex flex-col gap-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-              Price — {draft.qty} {unitLabel(draft)} · {draft.selectedProduct ? draft.selectedProduct.name : draft.query}
-            </div>
             <div className="grid grid-cols-2 gap-3">
               <Field label="USD">
                 <input
@@ -658,10 +702,38 @@ export function RecordSaleSheet({
           <span className="text-base font-semibold">Grand Total</span>
           <span className="tabular text-lg font-bold">{grandTotal}</span>
         </div>
-        <Button onClick={submit} disabled={saving || lines.length === 0} className="w-full justify-center">
+        <Button onClick={() => setConfirmOpen(true)} disabled={saving || lines.length === 0} className="w-full justify-center">
           {saving ? 'Saving…' : 'Record Sale'}
         </Button>
       </div>
+
+      <BottomSheet open={confirmOpen} onClose={() => !saving && setConfirmOpen(false)}>
+        <div className="flex flex-col gap-3">
+          <h2 className="text-base font-semibold">Confirm this sale?</h2>
+          <div className="flex flex-col gap-1.5">
+            {lines.map((l) => (
+              <div key={l.key} className="flex items-center justify-between gap-2 text-sm">
+                <span className="min-w-0 truncate">
+                  {l.qty} {unitLabel(l)} · {l.name}
+                </span>
+                <span className="tabular shrink-0 text-[var(--text-muted)]">{formatLineAmounts(l)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between border-t border-[var(--gridline)] pt-3">
+            <span className="text-sm font-semibold">Grand Total</span>
+            <span className="tabular text-base font-bold">{grandTotal}</span>
+          </div>
+          <div className="mt-1 flex gap-2">
+            <Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={saving} className="flex-1 justify-center">
+              Back
+            </Button>
+            <Button onClick={submit} disabled={saving} className="flex-1 justify-center">
+              {saving ? 'Saving…' : 'Confirm & Record'}
+            </Button>
+          </div>
+        </div>
+      </BottomSheet>
     </BottomSheet>
   )
 }

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, DEFAULT_CATEGORIES, UNIT_TYPES, type Product, type Variant, type TransferDirection } from '../db'
 import { Button, Modal, Field, inputClass, Pill, BottomSheet } from '../components/ui'
-import { PlusIcon, SearchIcon, SettingsIcon, MoreVerticalIcon, SortIcon, FilterIcon, BoxesIcon, ChartIcon } from '../components/icons'
+import { PlusIcon, SearchIcon, SettingsIcon, MoreVerticalIcon, SortIcon, FilterIcon, BoxesIcon, ChartIcon, CheckSquareIcon } from '../components/icons'
 import { ItemThumb } from '../components/ItemThumb'
 import { ProductDetailView } from '../components/ProductDetailView'
 import {
@@ -58,6 +58,13 @@ export default function Inventory() {
   const [priceBaselineFilter, setPriceBaselineFilter] = useState<PriceBaselineFilter>('all')
 
   const [detailProductId, setDetailProductId] = useState<number | 'new' | null>(null)
+
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [groupSheetOpen, setGroupSheetOpen] = useState(false)
+  const [groupTarget, setGroupTarget] = useState<'new' | number>('new')
+  const [groupNewName, setGroupNewName] = useState('')
+  const [groupTargetQuery, setGroupTargetQuery] = useState('')
 
   const [unitsModalOpen, setUnitsModalOpen] = useState(false)
   const [unitsCategoryName, setUnitsCategoryName] = useState('')
@@ -203,6 +210,69 @@ export default function Inventory() {
     setTransferVariantId('')
   }
 
+  function toggleSelected(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false)
+    setSelectedIds(new Set())
+  }
+
+  // Merges the selected quick-sale/raw-text products into one master
+  // product: each source product's variant(s) are reparented (their IDs are
+  // kept, so past Sale rows referencing them stay intact) and, if a variant
+  // still has the generic "Standard" label, renamed to the exact string the
+  // source product was originally typed as -- then the now-empty source
+  // product shell is deleted.
+  async function mergeSelectedIntoGroup() {
+    const sourceIds = Array.from(selectedIds)
+    if (sourceIds.length === 0) return
+    const now = Date.now()
+
+    await db.transaction('rw', db.products, db.variants, async () => {
+      let targetId: number
+      if (groupTarget === 'new') {
+        const name = groupNewName.trim()
+        if (!name) return
+        targetId = (await db.products.add({
+          name,
+          category: 'General',
+          description: '',
+          images: [],
+          options: [],
+          archived: false,
+          createdAt: now,
+          updatedAt: now,
+        })) as number
+      } else {
+        targetId = groupTarget
+      }
+
+      for (const sourceId of sourceIds) {
+        if (sourceId === targetId) continue
+        const source = await db.products.get(sourceId)
+        if (!source) continue
+        const vs = await db.variants.where('productId').equals(sourceId).toArray()
+        for (const v of vs) {
+          const label = v.label === 'Standard' ? source.name : `${source.name} — ${v.label}`
+          await db.variants.update(v.id!, { productId: targetId, label, updatedAt: now })
+        }
+        await db.products.delete(sourceId)
+      }
+    })
+
+    setGroupSheetOpen(false)
+    setGroupNewName('')
+    setGroupTarget('new')
+    exitSelectMode()
+  }
+
   function openUnitsEditor(categoryName: string) {
     const existing = (categories ?? []).find((c) => c.name === categoryName)
     setUnitsCategoryName(categoryName)
@@ -274,17 +344,43 @@ export default function Inventory() {
           ))}
         </div>
 
+        {selectMode && (
+          <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+            <span className="text-sm font-medium text-gray-700">{selectedIds.size} selected</span>
+            <div className="flex items-center gap-3">
+              <button onClick={exitSelectMode} className="text-sm font-medium text-gray-500">Cancel</button>
+              <button
+                onClick={() => setGroupSheetOpen(true)}
+                disabled={selectedIds.size === 0}
+                className="rounded-lg bg-black px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-30"
+              >
+                Group…
+              </button>
+            </div>
+          </div>
+        )}
+
         {view === 'list' ? (
           <div className="flex flex-col">
             {filtered.map((product, idx) => {
               const variants = variantsByProduct.get(product.id!) ?? []
               const available = availableOf(variants)
+              const selected = selectedIds.has(product.id!)
               return (
                 <button
                   key={product.id}
-                  onClick={() => setDetailProductId(product.id!)}
+                  onClick={() => (selectMode ? toggleSelected(product.id!) : setDetailProductId(product.id!))}
                   className={`flex w-full items-center gap-3 py-3 text-left ${idx > 0 ? 'border-t border-gray-100' : ''}`}
                 >
+                  {selectMode && (
+                    <span
+                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
+                        selected ? 'border-black bg-black text-white' : 'border-gray-300'
+                      }`}
+                    >
+                      {selected && <CheckSquareIcon className="h-3.5 w-3.5" />}
+                    </span>
+                  )}
                   <ItemThumb image={product.images[0]} size={48} className="!rounded-lg !bg-gray-100 !text-gray-400" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-semibold text-black">{product.name}</div>
@@ -420,6 +516,16 @@ export default function Inventory() {
           <button
             onClick={() => {
               setMoreMenuOpen(false)
+              setSelectMode(true)
+            }}
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+          >
+            <CheckSquareIcon className="h-5 w-5 text-gray-500" />
+            Select items to group
+          </button>
+          <button
+            onClick={() => {
+              setMoreMenuOpen(false)
               setTransferSheetOpen(true)
             }}
             className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
@@ -546,6 +652,68 @@ export default function Inventory() {
               </ul>
             </div>
           )}
+        </div>
+      </BottomSheet>
+
+      {/* Group selected raw-text items into one master product */}
+      <BottomSheet open={groupSheetOpen} onClose={() => setGroupSheetOpen(false)} contentClassName="!bg-white !text-black">
+        <div className="flex flex-col gap-3 pt-2">
+          <h2 className="text-base font-semibold">Group {selectedIds.size} item{selectedIds.size === 1 ? '' : 's'}</h2>
+          <p className="text-xs text-gray-500">
+            Each selected item becomes its own variant under one master product — nothing is deleted, just reorganized.
+          </p>
+
+          <div className="flex gap-2">
+            <button onClick={() => setGroupTarget('new')} className={shopifyChipClass(groupTarget === 'new') + ' flex-1'}>
+              New group
+            </button>
+            <button onClick={() => setGroupTarget(typeof groupTarget === 'number' ? groupTarget : -1)} className={shopifyChipClass(typeof groupTarget === 'number') + ' flex-1'}>
+              Existing product
+            </button>
+          </div>
+
+          {groupTarget === 'new' ? (
+            <input
+              autoFocus
+              className={shopifyInputClass}
+              placeholder="Master group name, e.g. Mattress Group"
+              value={groupNewName}
+              onChange={(e) => setGroupNewName(e.target.value)}
+            />
+          ) : (
+            <div className="flex flex-col gap-2">
+              <input
+                className={shopifyInputClass}
+                placeholder="Search products"
+                value={groupTargetQuery}
+                onChange={(e) => setGroupTargetQuery(e.target.value)}
+              />
+              <div className="max-h-48 overflow-y-auto rounded-lg border border-gray-100">
+                {(products ?? [])
+                  .filter((p) => !selectedIds.has(p.id!) && p.name.toLowerCase().includes(groupTargetQuery.toLowerCase()))
+                  .slice(0, 20)
+                  .map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => setGroupTarget(p.id!)}
+                      className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm ${
+                        groupTarget === p.id ? 'bg-gray-100 font-medium' : ''
+                      }`}
+                    >
+                      {p.name}
+                    </button>
+                  ))}
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={mergeSelectedIntoGroup}
+            disabled={groupTarget === 'new' ? !groupNewName.trim() : typeof groupTarget !== 'number' || groupTarget < 0}
+            className="mt-1 w-full rounded-lg bg-black py-2.5 text-sm font-semibold text-white disabled:opacity-30"
+          >
+            Group items
+          </button>
         </div>
       </BottomSheet>
 

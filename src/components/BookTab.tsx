@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type Sale } from '../db'
 import { ChevronLeftIcon } from './icons'
 import { DaybookRow } from './DaybookRow'
+import { EditSaleSheet } from './EditSaleSheet'
 import { dateKeyMonrovia, formatDateMonrovia, formatTimeMonrovia, money } from '../lib/format'
 import { lrdAmountOf, usdAmountOf, customerLabelOf } from '../lib/salesLedger'
 
@@ -36,6 +37,7 @@ interface ArchivedOrder {
 // total, and a static read-only ledger view of any given closed day.
 export function BookTabView({ onClose }: { onClose: () => void }) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [editingSale, setEditingSale] = useState<Sale | null>(null)
   const allSales = useLiveQuery(() => db.sales.orderBy('timestamp').reverse().toArray(), [])
   const todayKey = dateKeyMonrovia(Date.now())
 
@@ -92,11 +94,12 @@ export function BookTabView({ onClose }: { onClose: () => void }) {
                 #{order.orderNumber} · {customerLabelOf(order)} · {formatTimeMonrovia(order.timestamp)}
               </div>
               {order.lines.map((line) => (
-                <DaybookRow key={line.id} sale={line} />
+                <DaybookRow key={line.id} sale={line} onEdit={() => setEditingSale(line)} />
               ))}
             </div>
           ))}
         </div>
+        <EditSaleSheet sale={editingSale} onClose={() => setEditingSale(null)} />
       </div>
     )
   }

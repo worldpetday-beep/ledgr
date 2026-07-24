@@ -1,15 +1,16 @@
 import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, releaseOrderNumberIfLatest, type Sale } from '../db'
+import { db, profitOf, type Sale } from '../db'
 import { ShopifyShell, ShopifyHeaderIconButton, shopifyInputClass, shopifyChipClass, shopifyCardClass } from '../components/ShopifyShell'
 import { PlusIcon, EditIcon, SearchIcon, MoreVerticalIcon, BoxesIcon, BookIcon } from '../components/icons'
 import { DaybookRow } from '../components/DaybookRow'
 import { BookTabView } from '../components/BookTab'
 import { WarehouseLedgerView } from '../components/WarehouseLedger'
+import { EditSaleSheet } from '../components/EditSaleSheet'
 import { BottomSheet, Field } from '../components/ui'
 import { useAppActions } from '../context/AppActions'
 import { money, dateKeyMonrovia, formatDateMonrovia, formatTimeMonrovia, selectOnFocus } from '../lib/format'
-import { lrdAmountOf, usdAmountOf, customerLabelOf } from '../lib/salesLedger'
+import { lrdAmountOf, usdAmountOf, customerLabelOf, deleteSaleLine, markSalePickedUp } from '../lib/salesLedger'
 
 type FilterTab = 'all' | 'tbs'
 
@@ -83,6 +84,17 @@ export default function Sales() {
   const ledgerSumUsd = useMemo(() => todaySales.reduce((s, l) => s + usdAmountOf(l), 0), [todaySales])
   const ledgerSumLrd = useMemo(() => todaySales.reduce((s, l) => s + lrdAmountOf(l), 0), [todaySales])
 
+  // Net profit is an aggregate summary only — the underlying per-item cost
+  // price itself is never shown on any individual daybook row.
+  const netProfitUsd = useMemo(
+    () => todaySales.filter((s) => s.currency === 'USD').reduce((s, l) => s + profitOf(l), 0),
+    [todaySales],
+  )
+  const netProfitLrd = useMemo(
+    () => todaySales.filter((s) => s.currency === 'LRD').reduce((s, l) => s + profitOf(l), 0),
+    [todaySales],
+  )
+
   const drawerCounts = useLiveQuery(() => db.drawerCounts.orderBy('timestamp').reverse().toArray(), [])
   const yesterdayClose = useMemo(() => (drawerCounts ?? []).find((d) => dateKeyMonrovia(d.timestamp) !== todayKey), [drawerCounts, todayKey])
 
@@ -111,41 +123,7 @@ export default function Sales() {
     setEodNote('')
   }
 
-  async function deleteSale(sale: Sale) {
-    await db.transaction('rw', db.sales, db.variants, db.settings, async () => {
-      await db.sales.delete(sale.id!)
-      const stockWasDeducted = !sale.tbs || sale.pickedUp
-      if (stockWasDeducted && sale.variantId) {
-        const variant = await db.variants.get(sale.variantId)
-        if (variant) {
-          const updated =
-            sale.location === 'vishalShop'
-              ? { stockVishalShop: variant.stockVishalShop + sale.qty }
-              : { stockMyShop: variant.stockMyShop + sale.qty }
-          await db.variants.update(sale.variantId, { ...updated, updatedAt: Date.now() })
-        }
-      }
-    })
-    // Strict order-ID sequence recycler: if that was the last line of the
-    // most-recently-issued order, the next new sale reuses this exact number.
-    await releaseOrderNumberIfLatest(sale.orderNumber)
-  }
-
-  async function markPickedUp(sale: Sale) {
-    await db.transaction('rw', db.sales, db.variants, async () => {
-      await db.sales.update(sale.id!, { pickedUp: true })
-      if (sale.variantId) {
-        const variant = await db.variants.get(sale.variantId)
-        if (variant) {
-          const updated =
-            sale.location === 'vishalShop'
-              ? { stockVishalShop: Math.max(0, variant.stockVishalShop - sale.qty) }
-              : { stockMyShop: Math.max(0, variant.stockMyShop - sale.qty) }
-          await db.variants.update(sale.variantId, { ...updated, updatedAt: Date.now() })
-        }
-      }
-    })
-  }
+  const [editingSale, setEditingSale] = useState<Sale | null>(null)
 
   function startEdit(order: OrderGroup) {
     setEditingOrderNumber(order.orderNumber)
@@ -242,7 +220,13 @@ export default function Sales() {
 
                 <div className="mt-1.5 divide-y divide-gray-100">
                   {order.lines.map((line) => (
-                    <DaybookRow key={line.id} sale={line} onDelete={() => deleteSale(line)} onMarkPickedUp={() => markPickedUp(line)} />
+                    <DaybookRow
+                      key={line.id}
+                      sale={line}
+                      onEdit={() => setEditingSale(line)}
+                      onDelete={() => deleteSaleLine(line)}
+                      onMarkPickedUp={() => markSalePickedUp(line)}
+                    />
                   ))}
                 </div>
               </div>
@@ -264,6 +248,13 @@ export default function Sales() {
             <div className="tabular text-right font-semibold text-black">{money(ledgerSumUsd, 'USD')}</div>
             <div className="text-gray-500">Ledger sales — LRD</div>
             <div className="tabular text-right font-semibold text-black">{money(ledgerSumLrd, 'LRD')}</div>
+          </div>
+
+          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-gray-100 pt-2 text-sm">
+            <div className="text-gray-500">Net profit — USD</div>
+            <div className="tabular text-right font-semibold text-green-700">{money(netProfitUsd, 'USD')}</div>
+            <div className="text-gray-500">Net profit — LRD</div>
+            <div className="tabular text-right font-semibold text-green-700">{money(netProfitLrd, 'LRD')}</div>
           </div>
 
           <div className="mt-3 grid grid-cols-2 gap-3">
@@ -371,6 +362,7 @@ export default function Sales() {
 
       {bookTabOpen && <BookTabView onClose={() => setBookTabOpen(false)} />}
       {warehouseLedgerOpen && <WarehouseLedgerView onClose={() => setWarehouseLedgerOpen(false)} />}
+      <EditSaleSheet sale={editingSale} onClose={() => setEditingSale(null)} />
     </ShopifyShell>
   )
 }
