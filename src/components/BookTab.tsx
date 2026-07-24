@@ -1,19 +1,22 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type Sale } from '../db'
-import { ChevronLeftIcon } from './icons'
+import { ChevronLeftIcon, MoreVerticalIcon, ScanIcon } from './icons'
 import { DaybookRow } from './DaybookRow'
 import { EditSaleSheet } from './EditSaleSheet'
+import { LedgerScanView } from './LedgerScan'
+import { BottomSheet } from './ui'
 import { dateKeyMonrovia, formatDateMonrovia, formatTimeMonrovia, money } from '../lib/format'
 import { lrdAmountOf, usdAmountOf, customerLabelOf } from '../lib/salesLedger'
 
-function Header({ title, onBack }: { title: string; onBack: () => void }) {
+function Header({ title, onBack, right }: { title: string; onBack: () => void; right?: ReactNode }) {
   return (
     <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 px-4 py-3">
       <button onClick={onBack} aria-label="Back" className="text-black">
         <ChevronLeftIcon className="h-5 w-5" />
       </button>
       <h1 className="flex-1 truncate text-base font-semibold">{title}</h1>
+      {right}
     </div>
   )
 }
@@ -38,6 +41,8 @@ interface ArchivedOrder {
 export function BookTabView({ onClose }: { onClose: () => void }) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [editingSale, setEditingSale] = useState<Sale | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [scanOpen, setScanOpen] = useState(false)
   const allSales = useLiveQuery(() => db.sales.orderBy('timestamp').reverse().toArray(), [])
   const todayKey = dateKeyMonrovia(Date.now())
 
@@ -106,7 +111,15 @@ export function BookTabView({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
-      <Header title="Book Tab" onBack={onClose} />
+      <Header
+        title="Book Tab"
+        onBack={onClose}
+        right={
+          <button onClick={() => setMenuOpen(true)} aria-label="More options" className="text-black">
+            <MoreVerticalIcon className="h-5 w-5" />
+          </button>
+        }
+      />
       <div className="flex-1 overflow-y-auto">
         {byDate.map((d) => (
           <button
@@ -124,6 +137,24 @@ export function BookTabView({ onClose }: { onClose: () => void }) {
           </p>
         )}
       </div>
+
+      <BottomSheet open={menuOpen} onClose={() => setMenuOpen(false)} contentClassName="!bg-white !text-black">
+        <div className="flex flex-col gap-1 pt-2">
+          <h2 className="px-1 pb-2 text-sm font-semibold text-gray-500">More options</h2>
+          <button
+            onClick={() => {
+              setMenuOpen(false)
+              setScanOpen(true)
+            }}
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+          >
+            <ScanIcon className="h-5 w-5 text-gray-500" />
+            Upload Ledger Image
+          </button>
+        </div>
+      </BottomSheet>
+
+      {scanOpen && <LedgerScanView onClose={() => setScanOpen(false)} />}
     </div>
   )
 }

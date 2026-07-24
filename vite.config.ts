@@ -12,7 +12,8 @@ export default defineConfig({
       srcDir: 'src',
       filename: 'sw.ts',
       injectManifest: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm,traineddata}'],
+        maximumFileSizeToCacheInBytes: 30 * 1024 * 1024,
       },
       includeAssets: ['favicon.svg'],
       manifest: {
