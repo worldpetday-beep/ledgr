@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { Bbox, DaybookDraft } from '../lib/ledgerOcr'
+import type { PageImage } from './DaybookDraftReview'
 
 type FieldRef =
   | { kind: 'line'; lineKey: string; field: 'qty' | 'description' | 'lrdAmount' | 'usdAmount' }
@@ -11,6 +12,7 @@ interface FlaggedItem {
   fieldLabel: string
   value: string | number
   bbox: Bbox | null
+  pageIndex: number
   inputType: 'text' | 'number'
 }
 
@@ -32,21 +34,24 @@ function buildFlaggedList(draft: DaybookDraft): FlaggedItem[] {
   draft.lines.forEach((line) => {
     const summaryLabel = `(${line.qty.value}) ${summarize(line.description.value || 'Item')} - $${line.usdAmount.value || line.lrdAmount.value || '...'}`
     if (!line.qty.verified) {
-      items.push({ ref: { kind: 'line', lineKey: line.key, field: 'qty' }, summaryLabel, fieldLabel: 'Quantity', value: line.qty.value, bbox: line.qty.bbox ?? line.bbox, inputType: 'number' })
+      items.push({ ref: { kind: 'line', lineKey: line.key, field: 'qty' }, summaryLabel, fieldLabel: 'Quantity', value: line.qty.value, bbox: line.qty.bbox ?? line.bbox, pageIndex: line.pageIndex, inputType: 'number' })
     }
     if (!line.description.verified) {
-      items.push({ ref: { kind: 'line', lineKey: line.key, field: 'description' }, summaryLabel, fieldLabel: 'Item Description', value: line.description.value, bbox: line.description.bbox ?? line.bbox, inputType: 'text' })
+      items.push({ ref: { kind: 'line', lineKey: line.key, field: 'description' }, summaryLabel, fieldLabel: 'Item Description', value: line.description.value, bbox: line.description.bbox ?? line.bbox, pageIndex: line.pageIndex, inputType: 'text' })
     }
     if (!line.lrdAmount.verified) {
-      items.push({ ref: { kind: 'line', lineKey: line.key, field: 'lrdAmount' }, summaryLabel, fieldLabel: 'Price (LRD)', value: line.lrdAmount.value, bbox: line.lrdAmount.bbox ?? line.bbox, inputType: 'number' })
+      items.push({ ref: { kind: 'line', lineKey: line.key, field: 'lrdAmount' }, summaryLabel, fieldLabel: 'Price (LRD)', value: line.lrdAmount.value, bbox: line.lrdAmount.bbox ?? line.bbox, pageIndex: line.pageIndex, inputType: 'number' })
     }
     if (!line.usdAmount.verified) {
-      items.push({ ref: { kind: 'line', lineKey: line.key, field: 'usdAmount' }, summaryLabel, fieldLabel: 'Price (USD)', value: line.usdAmount.value, bbox: line.usdAmount.bbox ?? line.bbox, inputType: 'number' })
+      items.push({ ref: { kind: 'line', lineKey: line.key, field: 'usdAmount' }, summaryLabel, fieldLabel: 'Price (USD)', value: line.usdAmount.value, bbox: line.usdAmount.bbox ?? line.bbox, pageIndex: line.pageIndex, inputType: 'number' })
     }
   })
   for (const [key, label] of TOTALS_META) {
     const f = draft.totals[key]
-    if (!f.verified) items.push({ ref: { kind: 'total', field: key }, summaryLabel: 'Closing totals', fieldLabel: label, value: f.value, bbox: f.bbox, inputType: 'number' })
+    // Closing totals aren't tied to a specific line, so they zoom into
+    // whichever snapshot is the last one (totals are usually written at the
+    // bottom of the final page photographed that day).
+    if (!f.verified) items.push({ ref: { kind: 'total', field: key }, summaryLabel: 'Closing totals', fieldLabel: label, value: f.value, bbox: f.bbox, pageIndex: -1, inputType: 'number' })
   }
   return items
 }
@@ -117,15 +122,11 @@ function CropZoom({ imageUrl, imageWidth, imageHeight, bbox }: { imageUrl: strin
 
 export function FocusedScanVerification({
   draft,
-  imageUrl,
-  imageWidth,
-  imageHeight,
+  images,
   onDone,
 }: {
   draft: DaybookDraft
-  imageUrl: string
-  imageWidth: number
-  imageHeight: number
+  images: PageImage[]
   onDone: (updated: DaybookDraft) => void
 }) {
   // Frozen at entry so stepping through doesn't reshuffle mid-flow.
@@ -136,6 +137,7 @@ export function FocusedScanVerification({
   const inputRef = useRef<HTMLInputElement>(null)
 
   const current = flagged[index]
+  const currentImage = current ? images[current.pageIndex >= 0 ? current.pageIndex : images.length - 1] ?? images[0] : images[0]
 
   useEffect(() => {
     if (current) setInputValue(String(current.value))
@@ -162,7 +164,7 @@ export function FocusedScanVerification({
     <div className="fixed inset-0 z-[60] flex flex-col bg-white">
       {/* Top split: zoomed crop of the current line, matching how a physical ledger page looks */}
       <div className="relative shrink-0">
-        <CropZoom imageUrl={imageUrl} imageWidth={imageWidth} imageHeight={imageHeight} bbox={current.bbox} />
+        <CropZoom imageUrl={currentImage.url} imageWidth={currentImage.width} imageHeight={currentImage.height} bbox={current.bbox} />
         <div className="absolute left-3 top-3 rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-600 shadow">
           Verification Required: {current.fieldLabel}
         </div>

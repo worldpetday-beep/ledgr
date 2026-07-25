@@ -1,11 +1,33 @@
 import { useState } from 'react'
 import { db, reserveNextCustomerNumber, reserveNextOrderNumber, type Currency } from '../db'
-import { recognizeLedgerImage, parseLedgerDraft, type DaybookDraft } from '../lib/ledgerOcr'
-import { DaybookDraftReview } from './DaybookDraftReview'
+import { recognizeLedgerImage, parseLedgerDraft, type DaybookDraft, type DraftField, type DraftTotals } from '../lib/ledgerOcr'
+import { applyAliasesToDraftLines } from '../lib/abbreviations'
+import { DaybookDraftReview, type PageImage } from './DaybookDraftReview'
 import { FocusedScanVerification } from './FocusedScanVerification'
 import { ChevronLeftIcon } from './icons'
 
 type Stage = 'upload' | 'processing' | 'review' | 'verify'
+const MAX_PAGES = 3
+
+// A closing-totals field only really lives on one physical page (usually
+// the last one photographed). When merging snapshots, keep whichever side
+// actually found a value instead of letting a later blank page zero out an
+// earlier confirmed read.
+function mergeTotalField<T>(a: DraftField<T>, b: DraftField<T>): DraftField<T> {
+  if (b.verified && !a.verified) return b
+  return a
+}
+
+function mergeTotals(a: DraftTotals, b: DraftTotals): DraftTotals {
+  return {
+    totalLrd: mergeTotalField(a.totalLrd, b.totalLrd),
+    totalUsd: mergeTotalField(a.totalUsd, b.totalUsd),
+    outboundLrd: mergeTotalField(a.outboundLrd, b.outboundLrd),
+    outboundUsd: mergeTotalField(a.outboundUsd, b.outboundUsd),
+    handCashLrd: mergeTotalField(a.handCashLrd, b.handCashLrd),
+    handCashUsd: mergeTotalField(a.handCashUsd, b.handCashUsd),
+  }
+}
 
 function Header({ title, onBack }: { title: string; onBack: () => void }) {
   return (
@@ -155,30 +177,38 @@ async function pushDraftToLedger(draft: DaybookDraft): Promise<number> {
 
 export function LedgerScanView({ onClose }: { onClose: () => void }) {
   const [stage, setStage] = useState<Stage>('upload')
-  const [imageUrl, setImageUrl] = useState<string | null>(null)
-  const [imageDims, setImageDims] = useState<{ width: number; height: number } | null>(null)
+  const [images, setImages] = useState<PageImage[]>([])
   const [draft, setDraft] = useState<DaybookDraft | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [approving, setApproving] = useState(false)
   const [progressLabel, setProgressLabel] = useState('Reading image…')
 
+  // Processes one snapshot and merges its lines into the same continuous
+  // review feed (keyed by pageIndex so bounding-box highlight sync can find
+  // the right source photo later), instead of starting a fresh draft.
   async function handleFile(file: File) {
     setError(null)
+    const pageIndex = images.length
     const url = URL.createObjectURL(file)
-    setImageUrl(url)
     setStage('processing')
     try {
       const dims = await getImageDimensions(url)
-      setImageDims(dims)
-      setProgressLabel('Scanning handwriting…')
+      setProgressLabel(images.length > 0 ? `Scanning page ${pageIndex + 1}…` : 'Scanning handwriting…')
       const lines = await recognizeLedgerImage(file)
-      const parsed = parseLedgerDraft(lines, dims.width)
-      setDraft(parsed)
+      const parsed = parseLedgerDraft(lines, dims.width, pageIndex)
+      const resolvedLines = await applyAliasesToDraftLines(parsed.lines)
+
+      setImages((prev) => [...prev, { url, width: dims.width, height: dims.height }])
+      setDraft((prev) =>
+        prev
+          ? { pageDate: prev.pageDate ?? parsed.pageDate, lines: [...prev.lines, ...resolvedLines], totals: mergeTotals(prev.totals, parsed.totals) }
+          : { pageDate: parsed.pageDate, lines: resolvedLines, totals: parsed.totals },
+      )
       setStage('review')
     } catch (err) {
       console.error('Ledger scan failed', err)
       setError('Could not read this image. Try a clearer, well-lit photo of the ledger page.')
-      setStage('upload')
+      setStage(images.length > 0 ? 'review' : 'upload')
     }
   }
 
@@ -197,17 +227,17 @@ export function LedgerScanView({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
+    <div className="fixed inset-0 z-50 flex flex-col bg-white text-slate-900">
       {stage !== 'verify' && <Header title="Ledger Scan Correction" onBack={onClose} />}
 
       {stage === 'upload' && (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-slate-500">
             Take or choose a clear, well-lit photo of a physical ledger page. Recognition happens fully on this
             device — nothing is uploaded anywhere.
           </p>
           {error && <p className="text-sm text-red-600">{error}</p>}
-          <label className="cursor-pointer rounded-lg bg-black px-5 py-3 text-sm font-semibold text-white">
+          <label className="cursor-pointer rounded-lg bg-slate-900 px-5 py-3 text-sm font-semibold text-white">
             Upload Ledger Image
             <input
               type="file"
@@ -225,29 +255,31 @@ export function LedgerScanView({ onClose }: { onClose: () => void }) {
 
       {stage === 'processing' && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-black" />
-          <p className="text-sm text-gray-500">{progressLabel}</p>
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" />
+          <p className="text-sm text-slate-500">{progressLabel}</p>
         </div>
       )}
 
-      {stage === 'review' && draft && imageUrl && (
+      {stage === 'review' && draft && images.length > 0 && (
         <DaybookDraftReview
           draft={draft}
           setDraft={setDraft}
-          imageUrl={imageUrl}
+          images={images}
+          onAddPage={images.length < MAX_PAGES ? handleFile : undefined}
+          pagesUsed={images.length}
+          maxPages={MAX_PAGES}
           onVerify={() => setStage('verify')}
           onApprove={handleApprove}
           onDiscard={onClose}
           approving={approving}
+          error={error}
         />
       )}
 
-      {stage === 'verify' && draft && imageUrl && imageDims && (
+      {stage === 'verify' && draft && images.length > 0 && (
         <FocusedScanVerification
           draft={draft}
-          imageUrl={imageUrl}
-          imageWidth={imageDims.width}
-          imageHeight={imageDims.height}
+          images={images}
           onDone={(updated) => {
             setDraft(updated)
             setStage('review')

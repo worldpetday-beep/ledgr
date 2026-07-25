@@ -22,30 +22,40 @@ export function DaybookRow({
 }) {
   const lrd = lrdAmountOf(sale)
   const usd = usdAmountOf(sale)
+  // A split payment (both currencies present) is shown in neutral ink like
+  // before; a single-currency line -- the normal case -- is called out in
+  // dark green to read at a glance, closer to how a paid line reads in the
+  // physical book.
+  const isSplit = lrd > 0 && usd > 0
 
   return (
-    <div className="flex items-center gap-3 py-2.5">
+    <div className="flex min-w-0 items-center gap-2 py-2.5">
       <button
         onClick={onEdit}
         disabled={!onEdit}
-        className="flex flex-1 items-center gap-3 text-left disabled:cursor-default"
+        className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-default"
       >
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-black text-xs font-bold text-white">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-black text-[11px] font-bold text-white">
           {sale.qty}
         </div>
+        {/* Name and variant get their own lines (variant indented, smaller)
+            instead of one concatenated truncated string -- a long name no
+            longer has to fight a variant label for the same line. */}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium text-slate-900">
-            {sale.itemName}
-            {sale.variant ? ` — ${sale.variant}` : ''}
-          </div>
-          <div className="truncate text-xs text-slate-400">
+          <div className="truncate text-[13px] font-medium leading-tight text-slate-900">{sale.itemName}</div>
+          {sale.variant && <div className="truncate pl-1.5 text-[11px] leading-tight text-slate-500">— {sale.variant}</div>}
+          <div className="truncate text-[11px] leading-tight text-slate-400">
             {sale.unitType ? `${sale.unitType} · ` : ''}
             {sale.location === 'vishalShop' ? 'Warehouse (Vishal)' : 'Store floor'}
             {sale.tbs ? ` · ${sale.pickedUp ? 'Picked up' : 'TBS'}` : ''}
           </div>
         </div>
-        <div className="tabular w-20 shrink-0 text-right text-sm text-slate-700">{lrd > 0 ? money(lrd, 'LRD') : ''}</div>
-        <div className="tabular w-20 shrink-0 text-right text-sm font-semibold text-slate-900">{usd > 0 ? money(usd, 'USD') : ''}</div>
+        <div className="tabular w-[4.5rem] shrink-0 text-right text-xs leading-tight">
+          {lrd > 0 && <span className={isSplit ? 'text-slate-600' : 'font-semibold text-green-700'}>{money(lrd, 'LRD')}</span>}
+        </div>
+        <div className="tabular w-[4.5rem] shrink-0 text-right text-xs leading-tight">
+          {usd > 0 && <span className={isSplit ? 'font-semibold text-slate-900' : 'font-semibold text-green-700'}>{money(usd, 'USD')}</span>}
+        </div>
       </button>
       {(onDelete || onMarkPickedUp) && (
         <div className="flex shrink-0 items-center gap-1.5">

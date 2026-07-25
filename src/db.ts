@@ -130,6 +130,7 @@ export const db = new Dexie('LedgrDB') as Dexie & {
   drawerCounts: EntityTable<DrawerCount, 'id'>
   stockTransfers: EntityTable<StockTransfer, 'id'>
   warehouseLedger: EntityTable<WarehouseLedgerEntry, 'id'>
+  abbreviations: EntityTable<AbbreviationRule, 'id'>
 }
 
 db.version(1).stores({
@@ -357,6 +358,18 @@ db.version(11).stores({
   warehouseLedger: '++id, timestamp, source, direction',
 })
 
+// v12: ledger-scan abbreviation alias engine — a growable dictionary mapping
+// this shop's handwritten shorthand to full item descriptions, seeded from
+// the owner's own conventions.
+db.version(12)
+  .stores({
+    abbreviations: '++id, pattern, createdAt',
+  })
+  .upgrade(async (tx) => {
+    const now = Date.now()
+    await tx.table('abbreviations').bulkAdd(SEED_ABBREVIATION_RULES.map((r) => ({ ...r, createdAt: now })))
+  })
+
 export const NEXT_ORDER_NUMBER_KEY = 'nextOrderNumber'
 export const ORDER_NUMBER_BASE = 1000
 export const WAREHOUSE_SOURCES_KEY = 'warehouseSources'
@@ -393,3 +406,24 @@ export async function releaseOrderNumberIfLatest(orderNumber: number): Promise<v
 }
 
 export const DEFAULT_CATEGORIES = ['General', 'Beverages', 'Snacks', 'Household', 'Personal Care', 'Electronics', 'Clothing']
+
+// A short-hand this shop writes in the ledger book (e.g. "bdl", "fam mat")
+// mapped to its full item-description meaning. Seeded from the owner's own
+// handwriting conventions; grows over time as unrecognized abbreviations get
+// manually matched during ledger-scan review (see src/lib/abbreviations.ts).
+export interface AbbreviationRule {
+  id?: number
+  pattern: string // matched case-insensitively; may be a single token ("pcs") or a full phrase
+  expansion: string
+  createdAt: number
+}
+
+export const SEED_ABBREVIATION_RULES: { pattern: string; expansion: string }[] = [
+  { pattern: 'pcs', expansion: 'pieces' },
+  { pattern: '8" st. spec. double mat', expansion: '8" star special double mattress' },
+  { pattern: 'ctn', expansion: 'carton' },
+  { pattern: 'bdl', expansion: 'bundle' },
+  { pattern: 'fam mat', expansion: 'family mattress' },
+  { pattern: 'eleg', expansion: 'elegance' },
+  { pattern: 'yrd', expansion: 'yard' },
+]

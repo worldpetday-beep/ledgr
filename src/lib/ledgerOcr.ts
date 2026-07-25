@@ -52,6 +52,8 @@ export interface DraftLine {
   lrdAmount: DraftField<number>
   usdAmount: DraftField<number>
   bbox: Bbox
+  pageIndex: number // which uploaded snapshot this line came from, for bounding-box highlight sync
+  aliasResolved: boolean // false => description contains shorthand not found in the abbreviation map; set by applyAliasesToDraft in src/lib/abbreviations.ts, not by the parser itself
 }
 
 export interface DraftTotals {
@@ -143,13 +145,29 @@ const FINANCIAL_KEYWORDS = {
   handCash: /\bhand\s*cash\b|\bcash\s*(in\s*)?hand\b|\bclosing\b/i,
 }
 
+// The three data pillars this parser is restricted to (Quantity /
+// Description / Amount) only ever live in the main ruled body of the page.
+// Anything sitting past this right-hand fraction of the page width is
+// almost always a margin artifact -- the "Page No / Date" stamp box, or the
+// facing page of the ledger book bleeding into frame -- not a real column,
+// so whole lines living entirely out there are dropped before parsing.
+const MARGIN_RIGHT_RATIO = 0.94
+// Bare noise marks (a stray period, dash, or single low-confidence glyph
+// picked up off a border/ruling line) that aren't a quantity, word, or
+// amount get filtered out rather than treated as description text.
+function isBorderNoise(word: OcrWord): boolean {
+  return word.text.trim().length <= 1 && !/\d/.test(word.text) && word.confidence < 40
+}
+
 // Heuristic parser matching this shop's specific handwritten layout: a
 // leading circled/parenthesized quantity, a continuous item description,
 // then trailing right-aligned numbers split into LRD (left column) and USD
 // (right column) by horizontal position. Anything we can't confidently
 // place is flagged (low confidence / unverified) for the correction wizard
-// rather than silently guessed.
-export function parseLedgerDraft(lines: OcrLine[], imageWidth: number): DaybookDraft {
+// rather than silently guessed. `pageIndex` stamps which uploaded snapshot
+// these lines came from, so a multi-page scan can still highlight the right
+// source image for any given line.
+export function parseLedgerDraft(lines: OcrLine[], imageWidth: number, pageIndex = 0): DaybookDraft {
   const draftLines: DraftLine[] = []
   const totals: DraftTotals = {
     totalLrd: field(0, 0, null, false),
@@ -178,6 +196,10 @@ export function parseLedgerDraft(lines: OcrLine[], imageWidth: number): DaybookD
       }
     }
 
+    // Whole line lives entirely past the ruled body of the page -- a margin
+    // stamp or the facing page bleeding into frame, not a real data pillar.
+    if (line.bbox.x0 > imageWidth * MARGIN_RIGHT_RATIO) continue
+
     const isTotalRow = FINANCIAL_KEYWORDS.total.test(line.text)
     const isOutboundRow = FINANCIAL_KEYWORDS.outbound.test(line.text)
     const isHandCashRow = FINANCIAL_KEYWORDS.handCash.test(line.text)
@@ -201,7 +223,7 @@ export function parseLedgerDraft(lines: OcrLine[], imageWidth: number): DaybookD
     }
 
     // Line-item row: leading qty, middle description, trailing amount column(s).
-    const words = [...line.words].sort((a, b) => a.bbox.x0 - b.bbox.x0)
+    const words = [...line.words].filter((w) => !isBorderNoise(w)).sort((a, b) => a.bbox.x0 - b.bbox.x0)
     if (words.length === 0) continue
 
     let qtyWord: OcrWord | null = null
@@ -231,12 +253,14 @@ export function parseLedgerDraft(lines: OcrLine[], imageWidth: number): DaybookD
     const usdAmount = right ? field(parseAmount(right.text) ?? 0, right.confidence, right.bbox) : field(0, 100, null, true)
 
     draftLines.push({
-      key: `draft-line-${lineIdx++}`,
+      key: `draft-line-${pageIndex}-${lineIdx++}`,
       qty,
       description,
       lrdAmount,
       usdAmount,
       bbox: line.bbox,
+      pageIndex,
+      aliasResolved: true,
     })
   }
 
