@@ -97,20 +97,57 @@ export function Modal({
   )
 }
 
+// Tracks how much of the viewport the on-screen keyboard is currently
+// covering, via the visualViewport API (falls back to 0 -- i.e. no-op --
+// wherever it's unsupported). Shared by every BottomSheet instance so a
+// centered modal never gets clipped underneath the keyboard.
+function useKeyboardInset(active: boolean): number {
+  const [inset, setInset] = useState(0)
+
+  useEffect(() => {
+    if (!active) {
+      setInset(0)
+      return
+    }
+    const vv = window.visualViewport
+    if (!vv) return
+    function onResize() {
+      if (!vv) return
+      setInset(Math.max(0, window.innerHeight - vv.height - vv.offsetTop))
+    }
+    vv.addEventListener('resize', onResize)
+    vv.addEventListener('scroll', onResize)
+    onResize()
+    return () => {
+      vv.removeEventListener('resize', onResize)
+      vv.removeEventListener('scroll', onResize)
+    }
+  }, [active])
+
+  return inset
+}
+
 export function BottomSheet({
   open,
   onClose,
   children,
   contentClassName = '',
+  centered = false,
 }: {
   open: boolean
   onClose: () => void
   children: ReactNode
   contentClassName?: string
+  // Opt-in: renders as a screen-centered modal (no bottom-anchored slide-up,
+  // no drag-to-dismiss handle) on every breakpoint instead of the default
+  // bottom-sheet-on-mobile/centered-on-desktop behavior. Both variants stay
+  // clear of the on-screen keyboard via visualViewport.
+  centered?: boolean
 }) {
   const [dragY, setDragY] = useState(0)
   const dragging = useRef(false)
   const startY = useRef(0)
+  const keyboardInset = useKeyboardInset(open)
 
   useEffect(() => {
     if (open) setDragY(0)
@@ -137,21 +174,33 @@ export function BottomSheet({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 md:items-center" onClick={onClose}>
+    <div
+      className={`fixed inset-0 z-50 flex justify-center bg-black/40 ${centered ? 'items-center px-4' : 'items-end md:items-center'}`}
+      style={{ paddingBottom: keyboardInset }}
+      onClick={onClose}
+    >
       <div
-        style={{ transform: `translateY(${dragY}px)`, transition: dragY === 0 ? 'transform 0.2s ease-out' : 'none' }}
-        className={`max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-[var(--surface-1)] md:max-w-lg md:rounded-2xl ${contentClassName}`}
+        style={{
+          transform: centered ? undefined : `translateY(${dragY}px)`,
+          transition: dragY === 0 ? 'transform 0.2s ease-out' : 'none',
+          maxHeight: `calc(min(92vh, 100dvh - ${keyboardInset}px))`,
+        }}
+        className={`w-full overflow-y-auto bg-[var(--surface-1)] md:max-w-lg ${
+          centered ? 'rounded-2xl' : 'rounded-t-2xl md:rounded-2xl'
+        } ${contentClassName}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div
-          className="sticky top-0 z-10 flex cursor-grab touch-none justify-center bg-inherit py-2 active:cursor-grabbing"
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-        >
-          <div className="h-1.5 w-10 rounded-full bg-[var(--gridline)]" />
-        </div>
-        <div className="px-5 pb-5">{children}</div>
+        {!centered && (
+          <div
+            className="sticky top-0 z-10 flex cursor-grab touch-none justify-center bg-inherit py-2 active:cursor-grabbing"
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+          >
+            <div className="h-1.5 w-10 rounded-full bg-[var(--gridline)]" />
+          </div>
+        )}
+        <div className={centered ? 'px-5 py-5' : 'px-5 pb-5'}>{children}</div>
       </div>
     </div>
   )
