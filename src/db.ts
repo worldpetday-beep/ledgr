@@ -131,6 +131,7 @@ export const db = new Dexie('LedgrDB') as Dexie & {
   stockTransfers: EntityTable<StockTransfer, 'id'>
   warehouseLedger: EntityTable<WarehouseLedgerEntry, 'id'>
   abbreviations: EntityTable<AbbreviationRule, 'id'>
+  customUnits: EntityTable<CustomUnit, 'id'>
 }
 
 db.version(1).stores({
@@ -370,6 +371,21 @@ db.version(12)
     await tx.table('abbreviations').bulkAdd(SEED_ABBREVIATION_RULES.map((r) => ({ ...r, createdAt: now })))
   })
 
+// A custom quantity qualifier/unit typed once into the "Other" field during
+// Record Sale (e.g. "bag", "roll") -- saved permanently so it renders as a
+// selectable pill alongside the built-in UNIT_TYPES in every future sale,
+// instead of having to be retyped from scratch each time.
+export interface CustomUnit {
+  id?: number
+  label: string
+  createdAt: number
+}
+
+// v13: persistent custom quantity qualifiers (Record Sale "Other" unit).
+db.version(13).stores({
+  customUnits: '++id, &label, createdAt',
+})
+
 export const NEXT_ORDER_NUMBER_KEY = 'nextOrderNumber'
 export const ORDER_NUMBER_BASE = 1000
 export const WAREHOUSE_SOURCES_KEY = 'warehouseSources'
@@ -385,6 +401,17 @@ export async function reserveNextOrderNumber(): Promise<number> {
     await db.settings.put({ key: NEXT_ORDER_NUMBER_KEY, value: String(current + 1) })
     return current
   })
+}
+
+// Saves a custom quantity qualifier the first time it's typed so it shows
+// up as a selectable pill in every future sale; a no-op if it's already
+// saved (case-insensitive) or matches a built-in UNIT_TYPES entry.
+export async function saveCustomUnit(label: string): Promise<void> {
+  const clean = label.trim()
+  if (!clean || UNIT_TYPES.some((u) => u.toLowerCase() === clean.toLowerCase())) return
+  const existing = await db.customUnits.where('label').equalsIgnoreCase(clean).first()
+  if (existing) return
+  await db.customUnits.add({ label: clean, createdAt: Date.now() })
 }
 
 // If the order being freed was the single most-recently-issued number (and no
