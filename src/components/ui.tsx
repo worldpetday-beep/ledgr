@@ -133,6 +133,7 @@ export function BottomSheet({
   children,
   contentClassName = '',
   centered = false,
+  lockBackdrop = false,
 }: {
   open: boolean
   onClose: () => void
@@ -143,6 +144,11 @@ export function BottomSheet({
   // bottom-sheet-on-mobile/centered-on-desktop behavior. Both variants stay
   // clear of the on-screen keyboard via visualViewport.
   centered?: boolean
+  // Opt-in: an accidental tap outside the panel is ignored instead of
+  // closing it -- for forms where losing in-progress input is costly, so
+  // dismissal only ever happens through an explicit, deliberate control
+  // (e.g. a close button) rendered by the caller.
+  lockBackdrop?: boolean
 }) {
   const [dragY, setDragY] = useState(0)
   const dragging = useRef(false)
@@ -177,7 +183,7 @@ export function BottomSheet({
     <div
       className={`fixed inset-0 z-50 flex justify-center bg-black/40 ${centered ? 'items-center px-4' : 'items-end md:items-center'}`}
       style={{ paddingBottom: keyboardInset }}
-      onClick={onClose}
+      onClick={lockBackdrop ? undefined : onClose}
     >
       <div
         style={{

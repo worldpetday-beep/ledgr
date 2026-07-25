@@ -17,3 +17,15 @@ export function itemSearchMatches(candidateLabel: string, query: string): boolea
   if (!q) return true
   return normalizeItemSearchText(candidateLabel).includes(q)
 }
+
+// Word-order-invariant identity key for duplicate detection -- "4 inch
+// nail" and "nail 4 inch" reduce to the same key, so re-typed items that
+// only differ in token order surface as the same underlying product
+// regardless of which order the words were written in.
+export function tokenSortKey(name: string): string {
+  return normalizeItemSearchText(name)
+    .split(' ')
+    .filter(Boolean)
+    .sort()
+    .join(' ')
+}

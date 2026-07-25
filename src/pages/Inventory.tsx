@@ -13,6 +13,7 @@ import {
   shopifyIconButtonClass,
 } from '../components/ShopifyShell'
 import { isLowStock, selectOnFocus } from '../lib/format'
+import { tokenSortKey } from '../lib/itemMatch'
 import { format } from 'date-fns'
 
 // Missing cost = never entered (costUnknown) OR left at a literal zero,
@@ -92,6 +93,38 @@ export default function Inventory() {
     for (const list of map.values()) list.sort((a, b) => a.order - b.order || a.sellPrice - b.sellPrice)
     return map
   }, [allVariants])
+
+  // Duplicate Syntax Inversion Resolver: flags products whose names are the
+  // same words in a different order (e.g. "4 inch nail" / "nail 4 inch") so
+  // they can be reviewed and merged. Detection is purely a read-only scan of
+  // the catalog -- the actual merge reuses mergeSelectedIntoGroup(), which
+  // only reparents variants (keeping their IDs, so past Sale rows stay
+  // exactly as recorded) and never touches db.sales.
+  const duplicateGroups = useMemo(() => {
+    const byKey = new Map<string, Product[]>()
+    for (const p of products ?? []) {
+      if (p.archived) continue
+      const key = tokenSortKey(p.name)
+      if (!key) continue
+      const list = byKey.get(key) ?? []
+      list.push(p)
+      byKey.set(key, list)
+    }
+    return Array.from(byKey.values()).filter((list) => list.length > 1)
+  }, [products])
+  const [dismissedDuplicateKeys, setDismissedDuplicateKeys] = useState<Set<string>>(new Set())
+  const visibleDuplicateGroups = duplicateGroups.filter((g) => !dismissedDuplicateKeys.has(tokenSortKey(g[0].name)))
+
+  function reviewDuplicateGroup(group: Product[]) {
+    setSelectedIds(new Set(group.map((p) => p.id!)))
+    setGroupTarget(group[0].id!)
+    setSelectMode(true)
+    setGroupSheetOpen(true)
+  }
+
+  function dismissDuplicateGroup(group: Product[]) {
+    setDismissedDuplicateKeys((prev) => new Set(prev).add(tokenSortKey(group[0].name)))
+  }
 
   const allCategories = useMemo(() => {
     const fromProducts = new Set((products ?? []).map((p) => p.category))
@@ -343,6 +376,27 @@ export default function Inventory() {
             </button>
           ))}
         </div>
+
+        {!selectMode && visibleDuplicateGroups.length > 0 && (
+          <div className="flex flex-col gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+            <span className="text-xs font-semibold text-amber-800">
+              {visibleDuplicateGroups.length} possible duplicate item{visibleDuplicateGroups.length === 1 ? '' : 's'} found
+            </span>
+            {visibleDuplicateGroups.map((group) => (
+              <div key={tokenSortKey(group[0].name)} className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5">
+                <span className="min-w-0 truncate text-xs text-gray-700">{group.map((p) => p.name).join('  ·  ')}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button onClick={() => dismissDuplicateGroup(group)} className="text-xs font-medium text-gray-400">
+                    Dismiss
+                  </button>
+                  <button onClick={() => reviewDuplicateGroup(group)} className="text-xs font-semibold text-amber-700">
+                    Review &amp; Merge
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {selectMode && (
           <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">

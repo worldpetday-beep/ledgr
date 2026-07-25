@@ -7,7 +7,6 @@ import {
   saveCustomUnit,
   UNIT_TYPES,
   type Currency,
-  type Category,
   type Product,
   type Variant,
   type FulfillmentLocation,
@@ -15,7 +14,7 @@ import {
 import { BottomSheet, Button, Field, inputClass, Badge, Pill, Switch } from './ui'
 import { LedgerPushReviewPanel, type TicketLineSummary } from './LedgerPushReviewPanel'
 import { ItemThumb } from './ItemThumb'
-import { SearchIcon, PlusIcon, TrashIcon } from './icons'
+import { SearchIcon, PlusIcon, TrashIcon, XIcon } from './icons'
 import { money, selectOnFocus, dateKeyMonrovia } from '../lib/format'
 import { itemSearchMatches } from '../lib/itemMatch'
 
@@ -24,6 +23,7 @@ interface ItemBlock {
   qty: number
   unitType: string
   customUnit: string
+  unitAbbrev: string // Single Entry's raw shortcode text ("pcs", "bag", ...); resolved into unitType/customUnit on commit
   query: string
   selectedProduct: Product | null
   selectedVariantId: number | null
@@ -37,6 +37,7 @@ function blankItem(): ItemBlock {
     qty: 1,
     unitType: 'Piece',
     customUnit: '',
+    unitAbbrev: '',
     query: '',
     selectedProduct: null,
     selectedVariantId: null,
@@ -45,11 +46,115 @@ function blankItem(): ItemBlock {
   }
 }
 
+// Shortcode vocabulary for the Single Entry unit box -- kept to the entry
+// layer only; resolved to a full descriptive name before anything is
+// written to the permanent ledger. "Bag" isn't one of the built-in
+// UNIT_TYPES, so it resolves through the same persistent-qualifier
+// mechanism as any other shop-specific custom unit.
+const UNIT_ABBREVIATIONS: { abbrev: string; full: string }[] = [
+  { abbrev: 'pcs', full: 'Piece' },
+  { abbrev: 'ctn', full: 'Carton' },
+  { abbrev: 'bdl', full: 'Bundle' },
+  { abbrev: 'rol', full: 'Roll' },
+  { abbrev: 'gal', full: 'Gallon' },
+  { abbrev: 'bag', full: 'Bag' },
+]
+
+// Resolves whatever's currently in the unit box into the underlying
+// unitType/customUnit fields the ledger actually stores: an exact
+// abbreviation match maps to its full name, a built-in unit or previously
+// saved qualifier matches as-is (case-insensitive), and anything else is
+// treated as a brand-new shop-specific qualifier.
+function resolveUnitAbbrev(raw: string, savedQualifiers: string[]): { unitType: string; customUnit: string } {
+  const text = raw.trim()
+  if (!text) return { unitType: 'Piece', customUnit: '' }
+  const abbrevMatch = UNIT_ABBREVIATIONS.find((u) => u.abbrev.toLowerCase() === text.toLowerCase())
+  const resolved = abbrevMatch ? abbrevMatch.full : text
+  const builtIn = UNIT_TYPES.find((u) => u.toLowerCase() === resolved.toLowerCase())
+  if (builtIn) return { unitType: builtIn, customUnit: '' }
+  const saved = savedQualifiers.find((q) => q.toLowerCase() === resolved.toLowerCase())
+  return { unitType: 'Other', customUnit: saved ?? resolved }
+}
+
 interface ItemSuggestion {
   key: string
   product: Product
   variant: Variant | null
   label: string
+}
+
+// --- Crash-recovery draft persistence ---
+// Only the plain, JSON-serializable fields survive a save/reload cycle --
+// `selectedProduct`/`selectedVariantId` are dropped (a live catalog match
+// is re-resolved by re-typing/re-picking after recovery) since a Product
+// carries Blob images that can't round-trip through JSON. The important
+// thing recovered is exactly what the user typed: quantities, item text,
+// and every price/total field.
+const DRAFT_STORAGE_KEY = 'ledgr:recordSaleDraft'
+
+interface PersistedItem {
+  key: string
+  qty: number
+  unitType: string
+  customUnit: string
+  query: string
+  usdAmount: string
+  lrdAmount: string
+}
+
+interface PersistedBulkTicket {
+  key: string
+  rows: PersistedItem[]
+  totalLrd: string
+  totalUsd: string
+}
+
+interface PersistedDraft {
+  viewMode: 'single' | 'bulk'
+  items: PersistedItem[]
+  bulkTickets: PersistedBulkTicket[]
+  location: FulfillmentLocation
+  totalLrd: string
+  totalUsd: string
+  tbs: boolean
+}
+
+function toPersistedItem(it: ItemBlock): PersistedItem {
+  const { key, qty, unitType, customUnit, query, usdAmount, lrdAmount } = it
+  return { key, qty, unitType, customUnit, query, usdAmount, lrdAmount }
+}
+
+function fromPersistedItem(p: PersistedItem): ItemBlock {
+  return { ...p, unitAbbrev: '', selectedProduct: null, selectedVariantId: null }
+}
+
+function saveDraftToStorage(draft: PersistedDraft) {
+  try {
+    localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft))
+  } catch {
+    // Storage unavailable/full -- crash recovery is a nicety, never a hard requirement.
+  }
+}
+
+function loadDraftFromStorage(): PersistedDraft | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as PersistedDraft) : null
+  } catch {
+    return null
+  }
+}
+
+function clearDraftFromStorage() {
+  try {
+    localStorage.removeItem(DRAFT_STORAGE_KEY)
+  } catch {
+    // no-op
+  }
+}
+
+function draftHasContent(draft: Pick<PersistedDraft, 'items' | 'bulkTickets'>): boolean {
+  return draft.items.some((it) => it.query.trim()) || draft.bulkTickets.some((t) => t.rows.some((r) => r.query.trim()))
 }
 
 function unitLabel(item: { unitType: string; customUnit: string }): string {
@@ -73,78 +178,69 @@ function blankBulkTicket(): BulkTicket {
   return { key: `ticket-${Date.now()}-${Math.random().toString(36).slice(2)}`, rows: [row], totalLrd: '', totalUsd: '', lastAddedRowKey: row.key }
 }
 
-// One item's Quantity -> Item Name -> (optional per-item price) block.
-// Pressing Enter anywhere in here never loops back to a fresh item and
-// never auto-accepts a fuzzy suggestion -- it submits the whole ticket
-// straight to the Ledger Push Review Panel with exactly the text on
-// screen. The only way to add another item is the explicit "Add Item"
-// button in the parent.
+// A committed item renders as a compact one-line summary pinned above the
+// active row, purely for visual reference -- tapping the trash icon is the
+// only interaction it offers; editing happens only in the active row.
+function CommittedItemRow({ item, onRemove }: { item: ItemBlock; onRemove: () => void }) {
+  const name = item.selectedProduct ? item.selectedProduct.name : item.query.trim()
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-3 py-2 text-sm">
+      <span className="min-w-0 truncate">
+        {item.qty} {unitLabel(item)} · {name}
+      </span>
+      <button onClick={onRemove} aria-label="Remove item" className="shrink-0 text-[var(--text-muted)] hover:text-[var(--status-critical)]">
+        <TrashIcon className="h-4 w-4" />
+      </button>
+    </div>
+  )
+}
+
+// The single active 3-part row: Quantity -> Unit (shortcode) -> Item
+// Description, in that sequential focus order, with a '+' at the row's
+// right edge. Enter chains focus forward field-by-field; only reaching the
+// end of Description without tapping '+' hands focus off to the ticket
+// totals -- '+' is the only thing that ever commits this row and opens a
+// fresh one.
 function ItemEntryBlock({
   item,
-  index,
-  canRemove,
   autoFocus,
   products,
   variantsByProduct,
   productStock,
-  categories,
   savedQualifiers,
   onUpdate,
-  onRemove,
-  onSubmitTicket,
+  onAddItem,
+  onAdvanceToTotals,
 }: {
   item: ItemBlock
-  index: number
-  canRemove: boolean
   autoFocus: boolean
   products: Product[]
   variantsByProduct: Map<number, Variant[]>
   productStock: Map<number, number>
-  categories: Category[]
   savedQualifiers: string[]
   onUpdate: (patch: Partial<ItemBlock>) => void
-  onRemove: () => void
-  onSubmitTicket: () => void
+  onAddItem: () => void
+  onAdvanceToTotals: () => void
 }) {
   const qtyRef = useRef<HTMLInputElement>(null)
+  const unitRef = useRef<HTMLInputElement>(null)
+  const descRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (autoFocus) qtyRef.current?.focus()
   }, [autoFocus])
 
-  const categoryAllowedUnits = useMemo(() => {
-    const categoryName = item.selectedProduct?.category ?? 'General'
-    const cat = categories.find((c) => c.name === categoryName)
-    return cat?.allowedUnits && cat.allowedUnits.length > 0 ? cat.allowedUnits : null
-  }, [categories, item.selectedProduct])
-  // A previously-typed custom qualifier ("bag", "roll", ...) renders as a
-  // permanent pill right alongside the built-in unit types from now on —
-  // only when the category hasn't already restricted the choices.
-  const availableUnits = categoryAllowedUnits
-    ? categoryAllowedUnits.includes('Other')
-      ? categoryAllowedUnits
-      : [...categoryAllowedUnits, 'Other']
-    : [...UNIT_TYPES.filter((u) => u !== 'Other'), ...savedQualifiers, 'Other']
+  const unitSuggestions = useMemo(() => {
+    const q = item.unitAbbrev.trim().toLowerCase()
+    if (!q) return []
+    return UNIT_ABBREVIATIONS.filter((u) => u.abbrev.startsWith(q) && u.abbrev !== q)
+  }, [item.unitAbbrev])
 
-  // Vocabulary the "Other" custom-unit field type-aheads against: built-in
-  // units plus every qualifier saved from a previous sale.
-  const qualifierVocabulary = useMemo(
-    () => [...UNIT_TYPES.filter((u) => u !== 'Other'), ...savedQualifiers],
-    [savedQualifiers],
-  )
-  const customUnitMatch = useMemo(() => {
-    const q = item.customUnit.trim().toLowerCase()
-    if (!q) return null
-    return qualifierVocabulary.find((u) => u.toLowerCase().startsWith(q) && u.toLowerCase() !== q) ?? null
-  }, [item.customUnit, qualifierVocabulary])
-
-  function commitCustomUnit() {
-    const clean = item.customUnit.trim()
-    if (clean) saveCustomUnit(clean).catch(() => {})
-  }
-
-  function applyQualifierMatch(match: string) {
-    onUpdate({ unitType: match, customUnit: '' })
+  function commitUnitAbbrev() {
+    const clean = item.unitAbbrev.trim()
+    if (!clean) return
+    const { unitType, customUnit } = resolveUnitAbbrev(clean, savedQualifiers)
+    if (unitType === 'Other') saveCustomUnit(customUnit).catch(() => {})
   }
 
   const itemSuggestions = useMemo<ItemSuggestion[]>(() => {
@@ -173,49 +269,86 @@ function ItemEntryBlock({
     onUpdate({ selectedProduct: s.product, selectedVariantId: s.variant?.id ?? null, query: s.label })
   }
 
-  function onEnterSubmit(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      onSubmitTicket()
-    }
+  function onQtyEnter(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    unitRef.current?.focus()
+  }
+
+  function onUnitEnter(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    commitUnitAbbrev()
+    descRef.current?.focus()
+  }
+
+  function onDescriptionEnter(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    onAdvanceToTotals()
   }
 
   return (
     <div className="rounded-xl border border-[var(--border)] p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Item {index + 1}</span>
-        {canRemove && (
-          <button onClick={onRemove} aria-label="Remove item" className="text-[var(--text-muted)] hover:text-[var(--status-critical)]">
-            <TrashIcon className="h-4 w-4" />
-          </button>
-        )}
-      </div>
-
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <input
           ref={qtyRef}
           type="number"
           inputMode="numeric"
           min={1}
-          className="tabular w-16 shrink-0 rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-2 py-2 text-center text-base font-semibold outline-none focus:border-[var(--series-1)]"
+          className="tabular w-12 shrink-0 rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-1.5 py-2 text-center text-sm font-semibold outline-none focus:border-[var(--series-1)]"
           value={item.qty}
           onFocus={selectOnFocus}
           onChange={(e) => onUpdate({ qty: Number(e.target.value) || 1 })}
-          onKeyDown={onEnterSubmit}
+          onKeyDown={onQtyEnter}
         />
-        {item.selectedProduct && <ItemThumb image={item.selectedProduct.images[0]} size={32} />}
+        <div className="relative w-16 shrink-0">
+          <input
+            ref={unitRef}
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-1.5 py-2 text-center text-xs font-medium outline-none focus:border-[var(--series-1)]"
+            placeholder="pcs"
+            value={item.unitAbbrev}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            onChange={(e) => onUpdate({ unitAbbrev: e.target.value })}
+            onBlur={commitUnitAbbrev}
+            onKeyDown={onUnitEnter}
+          />
+          {unitSuggestions.length > 0 && (
+            <div className="absolute z-10 mt-1 w-28 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
+              {unitSuggestions.map((s) => (
+                <button
+                  key={s.abbrev}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    onUpdate({ unitAbbrev: s.abbrev })
+                    descRef.current?.focus()
+                  }}
+                  className="flex w-full items-center justify-between px-2 py-1.5 text-left text-xs hover:bg-[var(--page-plane)]"
+                >
+                  <span className="font-semibold">{s.abbrev}</span>
+                  <span className="text-[var(--text-muted)]">{s.full}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="relative min-w-0 flex-1">
           <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
           <input
+            ref={descRef}
             className={inputClass + ' pl-9'}
-            placeholder="Item name"
+            placeholder="Item description"
             value={item.query}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
             onChange={(e) => onUpdate({ query: e.target.value, selectedProduct: null, selectedVariantId: null })}
-            onKeyDown={onEnterSubmit}
+            onKeyDown={onDescriptionEnter}
           />
           {/* Suggestions are only ever applied by an explicit tap/click below
               -- Enter always keeps the raw typed text, never a close match. */}
@@ -238,89 +371,22 @@ function ItemEntryBlock({
             </div>
           )}
         </div>
+        <button
+          type="button"
+          onClick={() => {
+            commitUnitAbbrev()
+            onAddItem()
+          }}
+          aria-label="Add item"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--series-1)] text-white"
+        >
+          <PlusIcon className="h-4 w-4" />
+        </button>
       </div>
 
       {!item.selectedProduct && item.query && (
         <span className="mt-1 block text-xs text-[var(--text-muted)]">Not in inventory — will be added as a new item.</span>
       )}
-
-      <div className="mt-2 grid grid-cols-3 gap-1.5">
-        {availableUnits.map((u) => (
-          <button
-            key={u}
-            type="button"
-            onClick={() => onUpdate({ unitType: u })}
-            className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
-              item.unitType === u
-                ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
-                : 'border-[var(--border)] bg-[var(--page-plane)] text-[var(--text-secondary)]'
-            }`}
-          >
-            {u}
-          </button>
-        ))}
-      </div>
-      {item.unitType === 'Other' && (
-        <div className="mt-1.5">
-          <input
-            className={inputClass}
-            placeholder="Custom unit"
-            value={item.customUnit}
-            onChange={(e) => onUpdate({ customUnit: e.target.value })}
-            onBlur={commitCustomUnit}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') commitCustomUnit()
-              onEnterSubmit(e)
-            }}
-          />
-          {/* Closest vocabulary match as you type -- tapping it applies the
-              match without ever blurring/refocusing the text field mid-type,
-              so the on-screen keyboard never collapses while evaluating. */}
-          {customUnitMatch && (
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => applyQualifierMatch(customUnitMatch)}
-              className="mt-1 rounded-md bg-[var(--page-plane)] px-2 py-1 text-xs font-medium text-[var(--series-1)]"
-            >
-              Use "{customUnitMatch}"?
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Per-item price is strictly optional -- the normal flow is to leave
-          this blank for every item and enter one ticket total below. */}
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <Field label="LRD (optional)">
-          <input
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="0.01"
-            className={inputClass}
-            placeholder="0.00"
-            value={item.lrdAmount}
-            onFocus={selectOnFocus}
-            onChange={(e) => onUpdate({ lrdAmount: e.target.value })}
-            onKeyDown={onEnterSubmit}
-          />
-        </Field>
-        <Field label="USD (optional)">
-          <input
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="0.01"
-            className={inputClass}
-            placeholder="0.00"
-            value={item.usdAmount}
-            onFocus={selectOnFocus}
-            onChange={(e) => onUpdate({ usdAmount: e.target.value })}
-            onKeyDown={onEnterSubmit}
-          />
-        </Field>
-      </div>
     </div>
   )
 }
@@ -510,7 +576,6 @@ export function RecordSaleSheet({
   // to these tables (and re-running on every write) while it's hidden.
   const products = useLiveQuery(() => (open ? db.products.orderBy('name').toArray() : []), [open])
   const allVariants = useLiveQuery(() => (open ? db.variants.toArray() : []), [open])
-  const categories = useLiveQuery(() => (open ? db.categories.toArray() : []), [open])
   const savedQualifierRows = useLiveQuery(() => (open ? db.customUnits.orderBy('label').toArray() : []), [open])
   const savedQualifiers = useMemo(() => (savedQualifierRows ?? []).map((r) => r.label), [savedQualifierRows])
 
@@ -526,37 +591,88 @@ export function RecordSaleSheet({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
+  const totalLrdRef = useRef<HTMLInputElement>(null)
+  const totalUsdRef = useRef<HTMLInputElement>(null)
 
-  // Reset the whole sheet each time it's opened fresh.
+  // Reset the whole sheet each time it's opened fresh -- unless a crash-
+  // recovery draft with real content is sitting in localStorage (the app was
+  // killed/lost power mid-entry), in which case that gets loaded back in
+  // instead of starting blank.
   useEffect(() => {
     if (open) {
-      const first = blankItem()
-      setViewMode('single')
-      setItems([first])
-      setLocation('myShop')
-      setTotalLrd('')
-      setTotalUsd('')
-      setLastAddedKey(first.key)
+      const recovered = loadDraftFromStorage()
+      if (recovered && draftHasContent(recovered)) {
+        const restoredItems = recovered.items.length > 0 ? recovered.items.map(fromPersistedItem) : [blankItem()]
+        setViewMode(recovered.viewMode)
+        setItems(restoredItems)
+        setLocation(recovered.location)
+        setTotalLrd(recovered.totalLrd)
+        setTotalUsd(recovered.totalUsd)
+        setLastAddedKey(null)
+        setTbs(recovered.tbs)
+        setBulkTickets(
+          recovered.bulkTickets.length > 0
+            ? recovered.bulkTickets.map((t) => ({ ...t, rows: t.rows.map(fromPersistedItem), lastAddedRowKey: null }))
+            : [blankBulkTicket()],
+        )
+      } else {
+        const first = blankItem()
+        setViewMode('single')
+        setItems([first])
+        setLocation('myShop')
+        setTotalLrd('')
+        setTotalUsd('')
+        setLastAddedKey(first.key)
+        setBulkTickets([blankBulkTicket()])
+        setTbs(false)
+      }
       setSameAsLast(false)
-      setTbs(false)
       setSaveError(null)
       setSaving(false)
       setReviewOpen(false)
-      setBulkTickets([blankBulkTicket()])
     }
   }, [open])
 
+  // Continuously mirrors the in-progress ticket(s) to localStorage while the
+  // sheet is open, so an unexpected app termination (device power loss,
+  // PWA killed by the OS) doesn't lose what's been typed -- recovered on
+  // the next open via the effect above.
+  useEffect(() => {
+    if (!open) return
+    saveDraftToStorage({
+      viewMode,
+      items: items.map(toPersistedItem),
+      bulkTickets: bulkTickets.map((t) => ({ key: t.key, totalLrd: t.totalLrd, totalUsd: t.totalUsd, rows: t.rows.map(toPersistedItem) })),
+      location,
+      totalLrd,
+      totalUsd,
+      tbs,
+    })
+  }, [open, viewMode, items, bulkTickets, location, totalLrd, totalUsd, tbs])
+
+  // The only way to leave this form is the explicit "X" button (the backdrop
+  // is locked) -- and even then, an in-progress ticket triggers a
+  // confirmation before anything is discarded, so an accidental tap can
+  // never silently wipe typed-in data.
+  function requestClose() {
+    const hasContent = draftHasContent({ items: items.map(toPersistedItem), bulkTickets: bulkTickets.map((t) => ({ ...t, rows: t.rows.map(toPersistedItem) })) })
+    if (hasContent && !window.confirm('Discard this in-progress sale? Anything typed will be lost.')) return
+    clearDraftFromStorage()
+    onClose()
+  }
+
   // One history entry for the sheet's lifetime: a hardware/gesture "back"
-  // closes the Ledger Push Review Panel if it's open, otherwise closes the
-  // whole sheet, instead of leaving the app.
+  // closes the Ledger Push Review Panel if it's open, otherwise requests
+  // closing the whole sheet (with the same discard confirmation), instead
+  // of leaving the app.
   const reviewOpenRef = useRef(reviewOpen)
   useEffect(() => {
     reviewOpenRef.current = reviewOpen
   }, [reviewOpen])
-  const onCloseRef = useRef(onClose)
+  const requestCloseRef = useRef(requestClose)
   useEffect(() => {
-    onCloseRef.current = onClose
-  }, [onClose])
+    requestCloseRef.current = requestClose
+  })
 
   useEffect(() => {
     if (!open) return
@@ -569,7 +685,7 @@ export function RecordSaleSheet({
         setReviewOpen(false)
       } else {
         pushed = false
-        onCloseRef.current()
+        requestCloseRef.current()
       }
     }
 
@@ -605,7 +721,14 @@ export function RecordSaleSheet({
 
   function addItem() {
     const fresh = blankItem()
-    setItems((prev) => [...prev, fresh])
+    setItems((prev) => {
+      // Resolve the row being committed's unit shortcode into the real
+      // unitType/customUnit before it becomes a read-only summary line.
+      const resolved = prev.map((it, i) =>
+        i === prev.length - 1 ? { ...it, ...resolveUnitAbbrev(it.unitAbbrev, savedQualifiers) } : it,
+      )
+      return [...resolved, fresh]
+    })
     setLastAddedKey(fresh.key)
   }
 
@@ -691,7 +814,12 @@ export function RecordSaleSheet({
     sameAsLast && lastSaleIsToday && lastSale ? dailyIndexByCustomerNumber.get(lastSale.customerNumber) ?? 1 : dailyIndexByCustomerNumber.size + 1
 
   function namedItems(): ItemBlock[] {
-    return items.filter((it) => (it.selectedProduct ? it.selectedProduct.name : it.query.trim()))
+    // The active (last) row's unit shortcode only gets resolved into a real
+    // unitType when '+' commits it -- if the user goes straight to Push to
+    // Ledger without ever tapping '+', resolve it here as a safety net.
+    return items
+      .map((it, i) => (i === items.length - 1 ? { ...it, ...resolveUnitAbbrev(it.unitAbbrev, savedQualifiers) } : it))
+      .filter((it) => (it.selectedProduct ? it.selectedProduct.name : it.query.trim()))
   }
 
   function namedBulkTickets(): { ticket: BulkTicket; rows: ItemBlock[] }[] {
@@ -958,6 +1086,7 @@ export function RecordSaleSheet({
       const totalRows = validTickets.reduce((s, t) => s + t.rows.length, 0)
       setSaving(false)
       setReviewOpen(false)
+      clearDraftFromStorage()
       onSaved(`Recorded ${validTickets.length} customer ticket${validTickets.length === 1 ? '' : 's'} — ${totalRows} item${totalRows === 1 ? '' : 's'} — ${grandTotal}`)
       onClose()
       return
@@ -986,12 +1115,23 @@ export function RecordSaleSheet({
 
     setSaving(false)
     setReviewOpen(false)
+    clearDraftFromStorage()
     onSaved(`Recorded ${valid.length} item${valid.length === 1 ? '' : 's'} — ${grandTotal}`)
     onClose()
   }
 
   return (
-    <BottomSheet open={open} onClose={onClose} centered>
+    <BottomSheet open={open} onClose={requestClose} centered lockBackdrop>
+      {/* The backdrop is locked (an accidental tap outside never closes this
+          form) -- this is the one deliberate, explicit way to leave, and it
+          always confirms first when there's anything typed to lose. */}
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Record Sale</h2>
+        <button onClick={requestClose} aria-label="Close" className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-muted)] hover:bg-[var(--page-plane)]">
+          <XIcon className="h-4 w-4" />
+        </button>
+      </div>
+
       <div className="mb-3 grid grid-cols-2 gap-2">
         <button
           type="button"
@@ -1033,78 +1173,74 @@ export function RecordSaleSheet({
 
       {viewMode === 'single' ? (
         <>
-          <div className="flex flex-col gap-3">
-            {items.map((it, i) => (
-              <ItemEntryBlock
-                key={it.key}
-                item={it}
-                index={i}
-                canRemove={items.length > 1}
-                autoFocus={it.key === lastAddedKey}
-                products={products ?? []}
-                variantsByProduct={variantsByProduct}
-                productStock={productStock}
-                categories={categories ?? []}
-                savedQualifiers={savedQualifiers}
-                onUpdate={(patch) => updateItem(it.key, patch)}
-                onRemove={() => removeItem(it.key)}
-                onSubmitTicket={openReview}
-              />
-            ))}
-          </div>
-
-          <Button onClick={addItem} variant="secondary" className="mt-3 w-full justify-center">
-            <PlusIcon className="h-4 w-4" />
-            Add Item
-          </Button>
-
-          {/* Single Total Capture (Topic 6): once any item carries its own
-              price, the whole-ticket total is calculated automatically instead
-              -- the two modes don't mix, to avoid double counting. */}
-          {!anyPerItemAmount ? (
-            <div className="mt-3 grid grid-cols-2 gap-3">
-              <Field label="Total LRD">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min={0}
-                  step="0.01"
-                  className={inputClass + ' text-lg font-semibold'}
-                  placeholder="0.00"
-                  value={totalLrd}
-                  onFocus={selectOnFocus}
-                  onChange={(e) => setTotalLrd(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      openReview()
-                    }
-                  }}
-                />
-              </Field>
-              <Field label="Total USD">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min={0}
-                  step="0.01"
-                  className={inputClass + ' text-lg font-semibold'}
-                  placeholder="0.00"
-                  value={totalUsd}
-                  onFocus={selectOnFocus}
-                  onChange={(e) => setTotalUsd(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      openReview()
-                    }
-                  }}
-                />
-              </Field>
+          {/* Every item but the active (last) one is committed -- shown as a
+              compact one-line summary pinned above, purely for visual
+              reference, per the '+' commit behavior below. */}
+          {items.length > 1 && (
+            <div className="mb-3 flex max-h-40 flex-col gap-1.5 overflow-y-auto">
+              {items.slice(0, -1).map((it) => (
+                <CommittedItemRow key={it.key} item={it} onRemove={() => removeItem(it.key)} />
+              ))}
             </div>
-          ) : (
-            <p className="mt-3 text-xs text-[var(--text-muted)]">Per-item pricing given — ticket total calculated automatically.</p>
           )}
+
+          <ItemEntryBlock
+            key={items[items.length - 1].key}
+            item={items[items.length - 1]}
+            autoFocus={items[items.length - 1].key === lastAddedKey}
+            products={products ?? []}
+            variantsByProduct={variantsByProduct}
+            productStock={productStock}
+            savedQualifiers={savedQualifiers}
+            onUpdate={(patch) => updateItem(items[items.length - 1].key, patch)}
+            onAddItem={addItem}
+            onAdvanceToTotals={() => totalLrdRef.current?.focus()}
+          />
+
+          {/* Single Total Capture: one whole-ticket total, LRD first then USD
+              -- submission blocks only when BOTH are left at zero. */}
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <Field label="Total LRD">
+              <input
+                ref={totalLrdRef}
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                className={inputClass + ' text-lg font-semibold'}
+                placeholder="0.00"
+                value={totalLrd}
+                onFocus={selectOnFocus}
+                onChange={(e) => setTotalLrd(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    totalUsdRef.current?.focus()
+                  }
+                }}
+              />
+            </Field>
+            <Field label="Total USD">
+              <input
+                ref={totalUsdRef}
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                className={inputClass + ' text-lg font-semibold'}
+                placeholder="0.00"
+                value={totalUsd}
+                onFocus={selectOnFocus}
+                onChange={(e) => setTotalUsd(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    openReview()
+                  }
+                }}
+              />
+            </Field>
+          </div>
         </>
       ) : (
         <div className="flex flex-col gap-3">
