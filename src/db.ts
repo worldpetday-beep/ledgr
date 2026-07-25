@@ -17,21 +17,6 @@ export interface Product {
   images: Blob[]
   options: ProductOption[] // structured Size/Color-style options; empty = freeform single/multi-variant product
   archived: boolean // true = deactivated/discontinued, hidden from the main product feed
-  folderId?: number // which Folder this product sits in; undefined/null = top level of the catalog
-  createdAt: number
-  updatedAt: number
-}
-
-// A smartphone-home-screen-style catalog folder: a named group that can
-// nest inside another folder indefinitely (parentId chains up to a root
-// folder, or to the top level when parentId is null), optionally with its
-// own thumbnail image for quick visual recognition.
-export interface Folder {
-  id?: number
-  name: string
-  parentId: number | null
-  thumbnail?: Blob
-  order: number
   createdAt: number
   updatedAt: number
 }
@@ -147,7 +132,6 @@ export const db = new Dexie('LedgrDB') as Dexie & {
   warehouseLedger: EntityTable<WarehouseLedgerEntry, 'id'>
   abbreviations: EntityTable<AbbreviationRule, 'id'>
   customUnits: EntityTable<CustomUnit, 'id'>
-  folders: EntityTable<Folder, 'id'>
 }
 
 db.version(1).stores({
@@ -409,6 +393,25 @@ db.version(14).stores({
   products: '++id, name, category, createdAt, archived, folderId',
   folders: '++id, parentId, name, order',
 })
+
+// v15: the nested-folder catalog is deprecated and removed in favor of a
+// flat, group-nested table (products grouped by their own variants, no
+// folder level in between) -- the `folders` table is dropped entirely and
+// any leftover `folderId` is stripped from existing products so nothing
+// stale lingers in the schema.
+db.version(15)
+  .stores({
+    products: '++id, name, category, createdAt, archived',
+    folders: null,
+  })
+  .upgrade(async (tx) => {
+    await tx
+      .table('products')
+      .toCollection()
+      .modify((p) => {
+        delete p.folderId
+      })
+  })
 
 export const NEXT_ORDER_NUMBER_KEY = 'nextOrderNumber'
 export const ORDER_NUMBER_BASE = 1000

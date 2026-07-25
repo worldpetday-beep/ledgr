@@ -49,10 +49,19 @@ function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [insightsOpen, setInsightsOpen] = useState(false)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
+  const [addProductSignal, setAddProductSignal] = useState(0)
   const nextToastId = useRef(1)
   const location = useLocation()
   const moreSectionActive = location.pathname.startsWith('/analytics') || location.pathname.startsWith('/settings')
   const fullBleed = location.pathname === '/sales' || location.pathname === '/inventory'
+  const onProductsTab = location.pathname === '/inventory'
+
+  // Context-aware FAB: Products/Inventory gets its own "add product" action
+  // instead of the default Record Sale quick-entry.
+  function handleFabClick() {
+    if (onProductsTab) setAddProductSignal((n) => n + 1)
+    else setSheetOpen(true)
+  }
 
   function showToast(text: string, tone: 'success' | 'error' = 'success') {
     const id = nextToastId.current++
@@ -61,7 +70,7 @@ function AppShell() {
   }
 
   return (
-    <AppActionsContext.Provider value={{ openRecordSale: () => setSheetOpen(true), showToast }}>
+    <AppActionsContext.Provider value={{ openRecordSale: () => setSheetOpen(true), showToast, addProductSignal }}>
       <div className="flex h-full min-h-screen w-full flex-col md:flex-row">
         {/* Desktop sidebar */}
         <aside className="hidden md:flex md:w-60 md:shrink-0 md:flex-col md:border-r md:border-[var(--border)] md:bg-[var(--surface-1)]">
@@ -111,10 +120,11 @@ function AppShell() {
           )}
         </main>
 
-        {/* Floating action button — opens Record Sale from anywhere */}
+        {/* Floating action button — context-aware: Record Sale everywhere
+            except the Products/Inventory tab, where it adds a new product. */}
         <button
-          onClick={() => setSheetOpen(true)}
-          aria-label="Quick record sale"
+          onClick={handleFabClick}
+          aria-label={onProductsTab ? 'Add new product' : 'Quick record sale'}
           className="fixed bottom-24 right-5 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--series-1)] text-white shadow-lg transition-transform active:scale-95 md:bottom-6 md:right-6"
         >
           <PlusIcon className="h-6 w-6" />
