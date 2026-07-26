@@ -35,6 +35,13 @@ export interface Variant {
   stockVishalShop: number
   lowStockThreshold: number
   order: number // ordering for cheap -> premium display; lower sorts first
+  // Set when a checkout auto-creates or auto-routes this variant from an
+  // unverified free-text sale line (see writeTicketLines in
+  // RecordSaleSheet.tsx) -- drives the "NEW" badge in Inventory while
+  // newSince is under 72h old. Never set for variants added by hand
+  // through the product editor.
+  isNew?: boolean
+  newSince?: number
   createdAt: number
   updatedAt: number
 }

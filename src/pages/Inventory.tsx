@@ -11,6 +11,7 @@ import {
   FilterIcon,
   BoxesIcon,
   CheckSquareIcon,
+  ChevronRightIcon,
 } from '../components/icons'
 import { ItemThumb } from '../components/ItemThumb'
 import { ProductDetailView } from '../components/ProductDetailView'
@@ -35,6 +36,12 @@ function hasMissingCost(v: Variant): boolean {
 
 function availableOf(variants: Variant[]): number {
   return variants.reduce((s, v) => s + v.stockMyShop + v.stockVishalShop, 0)
+}
+
+const NEW_BADGE_WINDOW_MS = 72 * 60 * 60 * 1000
+
+function isRecentlyNew(v: Variant): boolean {
+  return !!v.isNew && !!v.newSince && Date.now() - v.newSince < NEW_BADGE_WINDOW_MS
 }
 
 type Chip = 'all' | 'lowStock' | 'missingCost' | 'sourcedVishal' | 'archived'
@@ -76,6 +83,30 @@ function EditableCell({ label, value, onCommit }: { label: string; value: number
   )
 }
 
+// Inline-editable variant title -- commits on blur, same pattern as the
+// numeric cells, so a "NEW" auto-routed variant's name can be corrected
+// right where it's flagged instead of opening the full product editor.
+function EditableTitle({ value, onCommit }: { value: string; onCommit: (next: string) => void }) {
+  const [text, setText] = useState(value)
+
+  useEffect(() => {
+    setText(value)
+  }, [value])
+
+  return (
+    <input
+      className="min-w-0 flex-1 truncate rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm text-gray-700 outline-none focus:border-gray-300 focus:bg-gray-50"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        const next = text.trim()
+        if (next) onCommit(next)
+        else setText(value)
+      }}
+    />
+  )
+}
+
 // The two-tier hierarchical table: a bold parent row per product, with each
 // of its variants indented beneath it behind a light vertical guide line.
 // Product identity stays put on the left; Cost Price / Stock Left sit in a
@@ -88,6 +119,7 @@ function ProductHierarchyTable({
   selectedIds,
   onTapProduct,
   onToggleSelected,
+  autoExpandId,
 }: {
   products: Product[]
   variantsByProduct: Map<number, Variant[]>
@@ -95,7 +127,29 @@ function ProductHierarchyTable({
   selectedIds: Set<number>
   onTapProduct: (id: number) => void
   onToggleSelected: (id: number) => void
+  autoExpandId?: number | null
 }) {
+  // Multi-variant products (an already-linked "master" group) render as a
+  // collapsed accordion by default -- tapping the parent header's chevron
+  // toggles its variant rows without disturbing the row's own tap target
+  // (select / open detail). A single-variant "loose" item has nothing
+  // meaningful to collapse, so its one row always shows.
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
+  function toggleExpanded(id: number) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // A product just linked via "Link to Master Product" opens expanded so
+  // the newly grouped variants are visible right away.
+  useEffect(() => {
+    if (autoExpandId != null) setExpandedIds((prev) => new Set(prev).add(autoExpandId))
+  }, [autoExpandId])
+
   async function commitCostPrice(variant: Variant, next: number) {
     await db.variants.update(variant.id!, { costPrice: next, costUnknown: false, updatedAt: Date.now() })
   }
@@ -107,39 +161,64 @@ function ProductHierarchyTable({
     await db.variants.update(variant.id!, { stockMyShop: Math.max(0, next), updatedAt: Date.now() })
   }
 
+  async function commitTitle(variant: Variant, next: string) {
+    await db.variants.update(variant.id!, { label: next, updatedAt: Date.now() })
+  }
+
   return (
     <div className="flex flex-col gap-3">
       {products.map((product) => {
         const variants = variantsByProduct.get(product.id!) ?? []
         const selected = selectedIds.has(product.id!)
+        const isAccordion = variants.length > 1
+        const expanded = !isAccordion || expandedIds.has(product.id!)
         return (
           <div key={product.id} className="overflow-hidden rounded-xl border border-gray-100">
-            {/* Parent row */}
-            <button
-              onClick={() => (selectMode ? onToggleSelected(product.id!) : onTapProduct(product.id!))}
-              className="flex w-full items-center gap-2.5 bg-gray-50 px-3 py-2.5 text-left"
-            >
-              {selectMode && (
-                <span
-                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
-                    selected ? 'border-black bg-black text-white' : 'border-gray-300'
-                  }`}
+            {/* Parent row -- a plain div (not a <button>) since it hosts a
+                second, independently-clickable real <button> for the
+                accordion chevron; nesting a <button> inside a <button>
+                would be invalid HTML. */}
+            <div className="flex w-full items-center gap-2.5 bg-gray-50 px-3 py-2.5 text-left">
+              <button
+                onClick={() => (selectMode ? onToggleSelected(product.id!) : onTapProduct(product.id!))}
+                className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+              >
+                {selectMode && (
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
+                      selected ? 'border-black bg-black text-white' : 'border-gray-300'
+                    }`}
+                  >
+                    {selected && <CheckSquareIcon className="h-3.5 w-3.5" />}
+                  </span>
+                )}
+                <ItemThumb image={product.images[0]} size={32} className="!rounded-md !bg-gray-200 !text-gray-400" />
+                <span className="min-w-0 flex-1 truncate text-sm font-bold text-black">{product.name}</span>
+              </button>
+              {isAccordion && (
+                <button
+                  type="button"
+                  aria-label={expanded ? 'Collapse variants' : 'Expand variants'}
+                  onClick={() => toggleExpanded(product.id!)}
+                  className="shrink-0 rounded-full p-1 text-gray-400 hover:bg-gray-100"
                 >
-                  {selected && <CheckSquareIcon className="h-3.5 w-3.5" />}
-                </span>
+                  <ChevronRightIcon className={`h-4 w-4 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                </button>
               )}
-              <ItemThumb image={product.images[0]} size={32} className="!rounded-md !bg-gray-200 !text-gray-400" />
-              <span className="min-w-0 flex-1 truncate text-sm font-bold text-black">{product.name}</span>
-              <span className="tabular shrink-0 text-xs text-gray-500">{availableOf(variants)} avail.</span>
-            </button>
+            </div>
 
             {/* Child rows -- indented beneath the parent behind a light
-                vertical guide line, product identity pinned left, Cost
-                Price / Stock Left scrollable on the right. */}
-            {variants.map((v) => (
+                vertical guide line, product identity pinned left (editable
+                title), Cost Price / Stock Left scrollable on the right. */}
+            {expanded && variants.map((v) => (
               <div key={v.id} className="flex items-center gap-2 border-t border-gray-50 py-2 pl-3 pr-3">
                 <span className="h-8 w-3 shrink-0 border-l-2 border-gray-200" />
-                <span className="min-w-0 flex-1 truncate text-sm text-gray-700">{v.label}</span>
+                {isRecentlyNew(v) && (
+                  <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700">
+                    New
+                  </span>
+                )}
+                <EditableTitle value={v.label} onCommit={(next) => commitTitle(v, next)} />
                 <div className="flex shrink-0 items-center gap-2 overflow-x-auto">
                   <EditableCell label="Cost Price" value={v.costPrice} onCommit={(n) => commitCostPrice(v, n)} />
                   <EditableCell label="Stock Left" value={v.stockMyShop} onCommit={(n) => commitStock(v, n)} />
@@ -178,6 +257,7 @@ export default function Inventory() {
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [groupSheetOpen, setGroupSheetOpen] = useState(false)
+  const [lastLinkedProductId, setLastLinkedProductId] = useState<number | null>(null)
   const [groupTarget, setGroupTarget] = useState<'new' | number>('new')
   const [groupNewName, setGroupNewName] = useState('')
   const [groupTargetQuery, setGroupTargetQuery] = useState('')
@@ -368,9 +448,58 @@ export default function Inventory() {
     })
   }
 
+  // "Select Filtered": whatever the top search bar's query currently
+  // matches gets checked in one tap, instead of hand-picking each row --
+  // `filtered` already applies that same query (plus the active chip/sort),
+  // so this just adopts its result set wholesale.
+  function selectFiltered() {
+    setSelectedIds(new Set(filtered.map((p) => p.id!)))
+  }
+
   function exitSelectMode() {
     setSelectMode(false)
     setSelectedIds(new Set())
+  }
+
+  // Prompts for a master product name, then reparents every selected
+  // product's variants under one new master (reusing the exact same safe
+  // merge as Group…/duplicate-resolve: variant IDs are kept, so historical
+  // Sale rows never change), and finally expands that master's accordion
+  // so the freshly linked rows are immediately visible.
+  async function linkToMasterProduct() {
+    const sourceIds = Array.from(selectedIds)
+    if (sourceIds.length === 0) return
+    const name = window.prompt('Master product name:')?.trim()
+    if (!name) return
+    const now = Date.now()
+
+    const targetId = await db.transaction('rw', db.products, db.variants, async () => {
+      const newTargetId = (await db.products.add({
+        name,
+        category: 'General',
+        description: '',
+        images: [],
+        options: [],
+        archived: false,
+        createdAt: now,
+        updatedAt: now,
+      })) as number
+
+      for (const sourceId of sourceIds) {
+        const source = await db.products.get(sourceId)
+        if (!source) continue
+        const vs = await db.variants.where('productId').equals(sourceId).toArray()
+        for (const v of vs) {
+          const label = v.label === 'Standard' ? source.name : `${source.name} — ${v.label}`
+          await db.variants.update(v.id!, { productId: newTargetId, label, updatedAt: now })
+        }
+        await db.products.delete(sourceId)
+      }
+      return newTargetId
+    })
+
+    exitSelectMode()
+    setLastLinkedProductId(targetId)
   }
 
   // Merges the selected quick-sale/raw-text products into one master
@@ -515,16 +644,33 @@ export default function Inventory() {
         )}
 
         {selectMode && (
-          <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
-            <span className="text-sm font-medium text-gray-700">{selectedIds.size} selected</span>
-            <div className="flex items-center gap-3">
+          <div className="flex flex-col gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-gray-700">{selectedIds.size} selected</span>
               <button onClick={exitSelectMode} className="text-sm font-medium text-gray-500">Cancel</button>
+            </div>
+            <div className="flex items-center gap-2">
+              {query.trim() && (
+                <button
+                  onClick={selectFiltered}
+                  className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-black"
+                >
+                  Select Filtered ({filtered.length})
+                </button>
+              )}
               <button
                 onClick={() => setGroupSheetOpen(true)}
                 disabled={selectedIds.size === 0}
-                className="rounded-lg bg-black px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-30"
+                className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-black disabled:opacity-30"
               >
                 Group…
+              </button>
+              <button
+                onClick={linkToMasterProduct}
+                disabled={selectedIds.size === 0}
+                className="rounded-lg bg-black px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-30"
+              >
+                Link to Master Product
               </button>
             </div>
           </div>
@@ -537,6 +683,7 @@ export default function Inventory() {
           selectedIds={selectedIds}
           onTapProduct={(id) => setDetailProductId(id)}
           onToggleSelected={toggleSelected}
+          autoExpandId={lastLinkedProductId}
         />
         {filtered.length === 0 && (
           <p className="py-10 text-center text-sm text-gray-500">No products match. Tap + above to add one.</p>

@@ -893,6 +893,25 @@ export function RecordSaleSheet({
 
   const lineSummaries = viewMode === 'bulk' ? bulkLineSummaries : singleLineSummaries
 
+  // A "Master Product" is one that's already been organized (grouped via
+  // Group…/Link to Master Product in Inventory) -- i.e. it carries more
+  // than one variant. An unverified free-text line with no exact name
+  // match gets auto-routed into the first master whose name is a substring
+  // of what was typed (or vice versa), so a near-miss like "6ft Zinc Sheet"
+  // lands inside the existing "Zinc" master instead of becoming its own
+  // disconnected product.
+  function findMasterProductMatch(typedName: string): Product | null {
+    const typed = typedName.toLowerCase()
+    for (const p of products ?? []) {
+      if (p.archived) continue
+      const variantCount = (variantsByProduct.get(p.id!) ?? []).length
+      if (variantCount <= 1) continue
+      const candidate = p.name.toLowerCase()
+      if (typed.includes(candidate) || candidate.includes(typed)) return p
+    }
+    return null
+  }
+
   // Writes one customer ticket's line items to the ledger: resolves/creates
   // each product+variant exactly like a manual free-text sale, distributes
   // a single ticket total across lines (qty-weighted) when no line carries
@@ -987,33 +1006,67 @@ export function RecordSaleSheet({
             variantLabel = newLabel
           }
         } else {
-          productId = (await db.products.add({
-            name,
-            category: 'General',
-            description: '',
-            images: [],
-            options: [],
-            archived: false,
-            createdAt: now,
-            updatedAt: now,
-          })) as number
-          productCategory = 'General'
-          variantLabel = 'Standard'
-          variantId = await db.variants.add({
-            productId,
-            label: variantLabel,
-            optionValues: [],
-            costPrice: 0,
-            costUnknown: true,
-            sellPrice: line.qty > 0 ? primaryAmount / line.qty : primaryAmount,
-            currency: primaryCurrency,
-            stockMyShop: 0,
-            stockVishalShop: 0,
-            lowStockThreshold: 3,
-            order: 0,
-            createdAt: now,
-            updatedAt: now,
-          })
+          // No exact match -- before spinning up a brand-new standalone
+          // product, check whether the typed text contains (or is
+          // contained by) an already-linked Master Product's name (a
+          // product with more than one variant, i.e. one that's already
+          // been organized via Group…/Link to Master Product). If so, this
+          // unverified line becomes a new variant under that master
+          // instead of a duplicate product entry.
+          const master = findMasterProductMatch(name)
+          if (master) {
+            productId = master.id
+            productCategory = master.category
+            const masterVariants = (await db.variants.where('productId').equals(master.id!).toArray()).sort((a, b) => a.order - b.order)
+            variantLabel = name
+            variantId = await db.variants.add({
+              productId: master.id!,
+              label: variantLabel,
+              optionValues: [],
+              costPrice: 0,
+              costUnknown: true,
+              sellPrice: line.qty > 0 ? primaryAmount / line.qty : primaryAmount,
+              currency: primaryCurrency,
+              stockMyShop: 0,
+              stockVishalShop: 0,
+              lowStockThreshold: 3,
+              order: masterVariants.length,
+              isNew: true,
+              newSince: now,
+              createdAt: now,
+              updatedAt: now,
+            })
+          } else {
+            productId = (await db.products.add({
+              name,
+              category: 'General',
+              description: '',
+              images: [],
+              options: [],
+              archived: false,
+              createdAt: now,
+              updatedAt: now,
+            })) as number
+            productCategory = 'General'
+            variantLabel = 'Standard'
+            variantId = await db.variants.add({
+              productId,
+              label: variantLabel,
+              optionValues: [],
+              costPrice: 0,
+              costUnknown: true,
+              sellPrice: line.qty > 0 ? primaryAmount / line.qty : primaryAmount,
+              currency: primaryCurrency,
+              stockMyShop: 0,
+              stockVishalShop: 0,
+              lowStockThreshold: 3,
+              order: 0,
+              isNew: true,
+              newSince: now,
+              createdAt: now,
+              updatedAt: now,
+            })
+          }
         }
       }
 
