@@ -107,6 +107,25 @@ function EditableTitle({ value, onCommit }: { value: string; onCommit: (next: st
   )
 }
 
+const EXPANDED_IDS_STORAGE_KEY = 'ledgr:inventoryExpandedProductIds'
+
+function loadExpandedIds(): Set<number> {
+  try {
+    const raw = localStorage.getItem(EXPANDED_IDS_STORAGE_KEY)
+    return raw ? new Set(JSON.parse(raw) as number[]) : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+function saveExpandedIds(ids: Set<number>) {
+  try {
+    localStorage.setItem(EXPANDED_IDS_STORAGE_KEY, JSON.stringify(Array.from(ids)))
+  } catch {
+    // no-op -- persistence is a nicety, not a hard requirement
+  }
+}
+
 // The two-tier hierarchical table: a bold parent row per product, with each
 // of its variants indented beneath it behind a light vertical guide line.
 // Product identity stays put on the left; Cost Price / Stock Left sit in a
@@ -115,7 +134,6 @@ function EditableTitle({ value, onCommit }: { value: string; onCommit: (next: st
 function ProductHierarchyTable({
   products,
   variantsByProduct,
-  selectMode,
   selectedIds,
   onTapProduct,
   onToggleSelected,
@@ -123,23 +141,26 @@ function ProductHierarchyTable({
 }: {
   products: Product[]
   variantsByProduct: Map<number, Variant[]>
-  selectMode: boolean
   selectedIds: Set<number>
   onTapProduct: (id: number) => void
   onToggleSelected: (id: number) => void
   autoExpandId?: number | null
 }) {
   // Multi-variant products (an already-linked "master" group) render as a
-  // collapsed accordion by default -- tapping the parent header's chevron
-  // toggles its variant rows without disturbing the row's own tap target
-  // (select / open detail). A single-variant "loose" item has nothing
-  // meaningful to collapse, so its one row always shows.
-  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
+  // collapsible accordion -- tapping the parent header's chevron toggles
+  // its variant rows without disturbing the row's own tap target (select /
+  // open detail). Expand/collapse state is mirrored to localStorage so it
+  // survives navigating away to another tab and back, not just re-renders
+  // -- a fresh mount would otherwise lose it since it's plain React state.
+  // A single-variant "loose" item has nothing meaningful to collapse, so
+  // its one row always shows.
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(() => loadExpandedIds())
   function toggleExpanded(id: number) {
     setExpandedIds((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
+      saveExpandedIds(next)
       return next
     })
   }
@@ -147,7 +168,13 @@ function ProductHierarchyTable({
   // A product just linked via "Link to Master Product" opens expanded so
   // the newly grouped variants are visible right away.
   useEffect(() => {
-    if (autoExpandId != null) setExpandedIds((prev) => new Set(prev).add(autoExpandId))
+    if (autoExpandId != null) {
+      setExpandedIds((prev) => {
+        const next = new Set(prev).add(autoExpandId)
+        saveExpandedIds(next)
+        return next
+      })
+    }
   }, [autoExpandId])
 
   async function commitCostPrice(variant: Variant, next: number) {
@@ -174,24 +201,26 @@ function ProductHierarchyTable({
         const expanded = !isAccordion || expandedIds.has(product.id!)
         return (
           <div key={product.id} className="overflow-hidden rounded-xl border border-gray-100">
-            {/* Parent row -- a plain div (not a <button>) since it hosts a
-                second, independently-clickable real <button> for the
-                accordion chevron; nesting a <button> inside a <button>
-                would be invalid HTML. */}
+            {/* Parent row -- a plain div (not a <button>) since it hosts
+                three independently-clickable real <button>s (checkbox,
+                name/detail, chevron); nesting a <button> inside another
+                <button> would be invalid HTML. The checkbox is always
+                present -- selection isn't gated behind a separate "select
+                mode" toggle. */}
             <div className="flex w-full items-center gap-2.5 bg-gray-50 px-3 py-2.5 text-left">
               <button
-                onClick={() => (selectMode ? onToggleSelected(product.id!) : onTapProduct(product.id!))}
+                onClick={() => onToggleSelected(product.id!)}
+                aria-label={selected ? 'Deselect item' : 'Select item'}
+                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
+                  selected ? 'border-black bg-black text-white' : 'border-gray-300'
+                }`}
+              >
+                {selected && <CheckSquareIcon className="h-3.5 w-3.5" />}
+              </button>
+              <button
+                onClick={() => onTapProduct(product.id!)}
                 className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
               >
-                {selectMode && (
-                  <span
-                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
-                      selected ? 'border-black bg-black text-white' : 'border-gray-300'
-                    }`}
-                  >
-                    {selected && <CheckSquareIcon className="h-3.5 w-3.5" />}
-                  </span>
-                )}
                 <ItemThumb image={product.images[0]} size={32} className="!rounded-md !bg-gray-200 !text-gray-400" />
                 <span className="min-w-0 flex-1 truncate text-sm font-bold text-black">{product.name}</span>
               </button>
@@ -254,7 +283,8 @@ export default function Inventory() {
 
   const [detailProductId, setDetailProductId] = useState<number | 'new' | null>(null)
 
-  const [selectMode, setSelectMode] = useState(false)
+  // Selection is an always-available affordance -- no separate "select
+  // mode" toggle to enter/exit first.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [groupSheetOpen, setGroupSheetOpen] = useState(false)
   const [lastLinkedProductId, setLastLinkedProductId] = useState<number | null>(null)
@@ -321,7 +351,6 @@ export default function Inventory() {
   function reviewDuplicateGroup(group: Product[]) {
     setSelectedIds(new Set(group.map((p) => p.id!)))
     setGroupTarget(group[0].id!)
-    setSelectMode(true)
     setGroupSheetOpen(true)
   }
 
@@ -456,8 +485,7 @@ export default function Inventory() {
     setSelectedIds(new Set(filtered.map((p) => p.id!)))
   }
 
-  function exitSelectMode() {
-    setSelectMode(false)
+  function clearSelection() {
     setSelectedIds(new Set())
   }
 
@@ -498,7 +526,7 @@ export default function Inventory() {
       return newTargetId
     })
 
-    exitSelectMode()
+    clearSelection()
     setLastLinkedProductId(targetId)
   }
 
@@ -548,7 +576,7 @@ export default function Inventory() {
     setGroupSheetOpen(false)
     setGroupNewName('')
     setGroupTarget('new')
-    exitSelectMode()
+    clearSelection()
   }
 
   function openUnitsEditor(categoryName: string) {
@@ -595,22 +623,54 @@ export default function Inventory() {
       }
     >
       <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              className={shopifyInputClass + ' pl-9'}
-              placeholder="Search by product, variant, or SKU"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+        {/* Persistent top bar: search (left), Select Filtered (center),
+            Link to Master Product (right) -- always visible, not gated
+            behind a separate "select mode" toggle. Wraps to two lines on
+            narrow phones since cramming all three into one literal row
+            would clip on a 390px screen, but it's one cohesive block. */}
+        <div className="flex flex-col gap-2 rounded-xl border border-gray-100 bg-gray-50 p-2">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input
+                className={shopifyInputClass + ' pl-9'}
+                placeholder="Search by product, variant, or SKU"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+            <button onClick={() => setSortSheetOpen(true)} className={shopifyIconButtonClass} aria-label="Sort by" title="Sort by">
+              <SortIcon className="h-4 w-4" />
+            </button>
+            <button onClick={() => setFilterSheetOpen(true)} className={shopifyIconButtonClass} aria-label="Filter by" title="Filter by">
+              <FilterIcon className="h-4 w-4" />
+            </button>
           </div>
-          <button onClick={() => setSortSheetOpen(true)} className={shopifyIconButtonClass} aria-label="Sort by" title="Sort by">
-            <SortIcon className="h-4 w-4" />
-          </button>
-          <button onClick={() => setFilterSheetOpen(true)} className={shopifyIconButtonClass} aria-label="Filter by" title="Filter by">
-            <FilterIcon className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={selectFiltered}
+              disabled={!query.trim()}
+              className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-black disabled:opacity-30"
+            >
+              Select Filtered{query.trim() ? ` (${filtered.length})` : ''}
+            </button>
+            <button
+              onClick={linkToMasterProduct}
+              disabled={selectedIds.size === 0}
+              className="shrink-0 rounded-lg bg-black px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-30"
+            >
+              Link to Master Product
+            </button>
+          </div>
+          {selectedIds.size > 0 && (
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="font-medium text-gray-700">{selectedIds.size} selected</span>
+              <div className="flex items-center gap-3">
+                <button onClick={clearSelection} className="font-medium text-gray-500">Clear</button>
+                <button onClick={() => setGroupSheetOpen(true)} className="font-semibold text-gray-700">Group into existing…</button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
@@ -622,7 +682,7 @@ export default function Inventory() {
           ))}
         </div>
 
-        {!selectMode && visibleDuplicateGroups.length > 0 && (
+        {visibleDuplicateGroups.length > 0 && (
           <div className="flex flex-col gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
             <span className="text-xs font-semibold text-amber-800">
               {visibleDuplicateGroups.length} possible duplicate item{visibleDuplicateGroups.length === 1 ? '' : 's'} found
@@ -643,43 +703,9 @@ export default function Inventory() {
           </div>
         )}
 
-        {selectMode && (
-          <div className="flex flex-col gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-gray-700">{selectedIds.size} selected</span>
-              <button onClick={exitSelectMode} className="text-sm font-medium text-gray-500">Cancel</button>
-            </div>
-            <div className="flex items-center gap-2">
-              {query.trim() && (
-                <button
-                  onClick={selectFiltered}
-                  className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-black"
-                >
-                  Select Filtered ({filtered.length})
-                </button>
-              )}
-              <button
-                onClick={() => setGroupSheetOpen(true)}
-                disabled={selectedIds.size === 0}
-                className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-black disabled:opacity-30"
-              >
-                Group…
-              </button>
-              <button
-                onClick={linkToMasterProduct}
-                disabled={selectedIds.size === 0}
-                className="rounded-lg bg-black px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-30"
-              >
-                Link to Master Product
-              </button>
-            </div>
-          </div>
-        )}
-
         <ProductHierarchyTable
           products={filtered}
           variantsByProduct={variantsByProduct}
-          selectMode={selectMode}
           selectedIds={selectedIds}
           onTapProduct={(id) => setDetailProductId(id)}
           onToggleSelected={toggleSelected}
@@ -769,16 +795,6 @@ export default function Inventory() {
       <BottomSheet open={moreMenuOpen} onClose={() => setMoreMenuOpen(false)} contentClassName="!bg-white !text-black">
         <div className="flex flex-col gap-1 pt-2">
           <h2 className="px-1 pb-2 text-sm font-semibold text-gray-500">More options</h2>
-          <button
-            onClick={() => {
-              setMoreMenuOpen(false)
-              setSelectMode(true)
-            }}
-            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
-          >
-            <CheckSquareIcon className="h-5 w-5 text-gray-500" />
-            Select items to group
-          </button>
           <button
             onClick={() => {
               setMoreMenuOpen(false)

@@ -13,7 +13,6 @@ import {
 } from '../db'
 import { BottomSheet, Button, Field, inputClass, Badge, Pill, Switch } from './ui'
 import { LedgerPushReviewPanel, type TicketLineSummary } from './LedgerPushReviewPanel'
-import { ItemThumb } from './ItemThumb'
 import { SearchIcon, PlusIcon, TrashIcon, XIcon } from './icons'
 import { money, selectOnFocus, dateKeyMonrovia } from '../lib/format'
 import { itemSearchMatches } from '../lib/itemMatch'
@@ -80,7 +79,16 @@ interface ItemSuggestion {
   key: string
   product: Product
   variant: Variant | null
-  label: string
+  // The variant's own descriptor -- what actually gets typed into the
+  // description field when picked. Falls back to the product name for a
+  // single-variant "loose" item, which has no separate variant identity.
+  variantLabel: string
+  // The parent Master Product's name, shown as a muted subtitle -- null
+  // for a loose (single-variant) product, since it has no separate parent.
+  masterName: string | null
+  stock: number
+  costPrice: number
+  costKnown: boolean
 }
 
 // --- Crash-recovery draft persistence ---
@@ -243,6 +251,10 @@ function ItemEntryBlock({
     if (unitType === 'Other') saveCustomUnit(customUnit).catch(() => {})
   }
 
+  // Matches against the variant's own description AND its Master Product's
+  // parent name -- either one containing the typed text is enough, so
+  // searching "Zinc" surfaces every variant under a "Zinc Roofing" master
+  // even if the variant's own label ("14G") doesn't mention zinc at all.
   const itemSuggestions = useMemo<ItemSuggestion[]>(() => {
     const q = item.query.trim()
     if (!q) return []
@@ -251,22 +263,80 @@ function ItemEntryBlock({
       const variants = variantsByProduct.get(p.id!) ?? []
       if (variants.length <= 1) {
         const v = variants[0] ?? null
-        const label = v && v.label !== 'Standard' ? `${p.name} — ${v.label}` : p.name
-        if (itemSearchMatches(label, q)) results.push({ key: `${p.id}-${v?.id ?? 'none'}`, product: p, variant: v, label })
+        const variantLabel = p.name
+        if (itemSearchMatches(variantLabel, q) || (v && itemSearchMatches(v.label, q))) {
+          results.push({
+            key: `${p.id}-${v?.id ?? 'none'}`,
+            product: p,
+            variant: v,
+            variantLabel,
+            masterName: null,
+            stock: v ? v.stockMyShop + v.stockVishalShop : productStock.get(p.id!) ?? 0,
+            costPrice: v?.costPrice ?? 0,
+            costKnown: v ? !v.costUnknown && v.costPrice > 0 : false,
+          })
+        }
       } else {
         for (const v of variants) {
-          const label = `${p.name} — ${v.label}`
-          if (itemSearchMatches(label, q) || itemSearchMatches(p.name, q)) {
-            results.push({ key: `${p.id}-${v.id}`, product: p, variant: v, label })
+          if (itemSearchMatches(v.label, q) || itemSearchMatches(p.name, q)) {
+            results.push({
+              key: `${p.id}-${v.id}`,
+              product: p,
+              variant: v,
+              variantLabel: v.label,
+              masterName: p.name,
+              stock: v.stockMyShop + v.stockVishalShop,
+              costPrice: v.costPrice,
+              costKnown: !v.costUnknown && v.costPrice > 0,
+            })
           }
         }
       }
     }
     return results.slice(0, 8)
-  }, [products, variantsByProduct, item.query])
+  }, [products, variantsByProduct, productStock, item.query])
 
   function pickSuggestion(s: ItemSuggestion) {
-    onUpdate({ selectedProduct: s.product, selectedVariantId: s.variant?.id ?? null, query: s.label })
+    onUpdate({ selectedProduct: s.product, selectedVariantId: s.variant?.id ?? null, query: s.variantLabel })
+  }
+
+  // "+ Create New Variant" -- fires a background write to actually
+  // initialize the product+variant in the catalog right away (rather than
+  // waiting for checkout to do it), then selects it so the ticket proceeds
+  // exactly like picking any other existing match.
+  async function pickCreateNew() {
+    const name = item.query.trim()
+    if (!name) return
+    const now = Date.now()
+    const productId = (await db.products.add({
+      name,
+      category: 'General',
+      description: '',
+      images: [],
+      options: [],
+      archived: false,
+      createdAt: now,
+      updatedAt: now,
+    })) as number
+    const variantId = (await db.variants.add({
+      productId,
+      label: 'Standard',
+      optionValues: [],
+      costPrice: 0,
+      costUnknown: true,
+      sellPrice: 0,
+      currency: 'USD',
+      stockMyShop: 0,
+      stockVishalShop: 0,
+      lowStockThreshold: 3,
+      order: 0,
+      isNew: true,
+      newSince: now,
+      createdAt: now,
+      updatedAt: now,
+    })) as number
+    const product: Product = { id: productId, name, category: 'General', description: '', images: [], options: [], archived: false, createdAt: now, updatedAt: now }
+    onUpdate({ selectedProduct: product, selectedVariantId: variantId, query: name })
   }
 
   function onQtyEnter(e: KeyboardEvent) {
@@ -351,23 +421,45 @@ function ItemEntryBlock({
             onKeyDown={onDescriptionEnter}
           />
           {/* Suggestions are only ever applied by an explicit tap/click below
-              -- Enter always keeps the raw typed text, never a close match. */}
-          {item.query && !item.selectedProduct && itemSuggestions.length > 0 && (
+              -- Enter always keeps the raw typed text, never a close match.
+              No product image (assets are always null here) -- the
+              description gets the space back instead, wrapping across
+              lines rather than truncating so long dimension/gauge names
+              stay fully readable. */}
+          {item.query && !item.selectedProduct && (
             <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
               {itemSuggestions.map((s) => (
                 <button
                   key={s.key}
                   type="button"
                   onClick={() => pickSuggestion(s)}
-                  className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-[var(--page-plane)]"
+                  className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-[var(--page-plane)]"
                 >
-                  <ItemThumb image={s.product.images[0]} size={28} />
-                  <span className="flex-1 truncate">{s.label}</span>
-                  <span className="tabular text-xs text-[var(--text-muted)]">
-                    {(s.variant ? s.variant.stockMyShop + s.variant.stockVishalShop : productStock.get(s.product.id!)) ?? 0} in stock
-                  </span>
+                  <div className="w-[70%] min-w-0">
+                    <div className="whitespace-normal break-words text-sm leading-snug">{s.variantLabel}</div>
+                    {s.masterName && <div className="truncate text-xs text-[var(--text-muted)]">{s.masterName}</div>}
+                  </div>
+                  <div className="ml-auto flex shrink-0 flex-col items-end gap-1 pt-0.5">
+                    <span className="tabular whitespace-nowrap rounded-full bg-[var(--page-plane)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]">
+                      {s.stock} left
+                    </span>
+                    {s.costKnown && (
+                      <span className="tabular whitespace-nowrap rounded-full bg-[var(--page-plane)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]">
+                        {money(s.costPrice, s.variant?.currency ?? 'USD')}
+                      </span>
+                    )}
+                  </div>
                 </button>
               ))}
+              {itemSuggestions.length === 0 && (
+                <button
+                  type="button"
+                  onClick={pickCreateNew}
+                  className="flex w-full items-center px-3 py-2 text-left text-sm font-medium text-[var(--series-1)] hover:bg-[var(--page-plane)]"
+                >
+                  + Create New Variant: "{item.query.trim()}"
+                </button>
+              )}
             </div>
           )}
         </div>
