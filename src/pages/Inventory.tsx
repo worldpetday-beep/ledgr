@@ -15,6 +15,7 @@ import {
 } from '../components/icons'
 import { ItemThumb } from '../components/ItemThumb'
 import { ProductDetailView } from '../components/ProductDetailView'
+import { AddProductFastEntryModal } from '../components/AddProductFastEntryModal'
 import { WarehouseLogLedger } from '../components/WarehouseLogLedger'
 import { FillMissingCostsView } from '../components/FillMissingCostsView'
 import {
@@ -1130,11 +1131,17 @@ export default function Inventory() {
         </div>
       </BottomSheet>
 
-      {detailProductId != null && (
-        <ProductDetailView
-          productId={detailProductId === 'new' ? undefined : detailProductId}
+      {detailProductId === 'new' && (
+        <AddProductFastEntryModal
           onClose={() => setDetailProductId(null)}
+          onCreated={(productId) => {
+            setDetailProductId(null)
+            setLastLinkedProductId(productId)
+          }}
         />
+      )}
+      {typeof detailProductId === 'number' && (
+        <ProductDetailView productId={detailProductId} onClose={() => setDetailProductId(null)} />
       )}
 
       <Modal open={unitsModalOpen} onClose={() => setUnitsModalOpen(false)} title="Units per category">
