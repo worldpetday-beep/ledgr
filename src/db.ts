@@ -42,6 +42,11 @@ export interface Variant {
   // through the product editor.
   isNew?: boolean
   newSince?: number
+  // Non-visual, background-only: every other variant ID this one has ever
+  // shared a checkout with (deduped), updated after each sale for future
+  // "frequently sold with" statistical analysis. Never shown directly in
+  // the UI as of this writing.
+  frequentlySoldWith?: number[]
   createdAt: number
   updatedAt: number
 }
@@ -86,6 +91,12 @@ export interface Sale {
   location: FulfillmentLocation // which shop's stock this line was deducted from
   tbs: boolean // "to be shipped/picked up" — customer already paid, goods still in store
   pickedUp: boolean // for tbs sales: whether stock has actually been handed over yet
+  // Set by the Natural Language Input Auto-Matcher when the typed order
+  // line ended in a trailing "/tag" source-switch flag (e.g. "/bro") --
+  // sourceTag is the raw flag, sourceNote the resolved human-readable
+  // explanation shown wherever the sale is reviewed.
+  sourceTag?: string
+  sourceNote?: string
 }
 
 export interface Category {

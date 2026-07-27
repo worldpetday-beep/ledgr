@@ -10,12 +10,14 @@ import {
   type Product,
   type Variant,
   type FulfillmentLocation,
+  type AbbreviationRule,
 } from '../db'
 import { BottomSheet, Button, Field, inputClass, Badge, Pill, Switch } from './ui'
 import { LedgerPushReviewPanel, type TicketLineSummary } from './LedgerPushReviewPanel'
 import { SearchIcon, PlusIcon, TrashIcon, XIcon } from './icons'
 import { money, selectOnFocus, dateKeyMonrovia } from '../lib/format'
 import { itemSearchMatches } from '../lib/itemMatch'
+import { parseNaturalLanguageLine } from '../lib/naturalLanguageOrder'
 
 interface ItemBlock {
   key: string
@@ -28,6 +30,11 @@ interface ItemBlock {
   selectedVariantId: number | null
   usdAmount: string
   lrdAmount: string
+  // Set by the Natural Language Input Auto-Matcher when the description
+  // was typed as a compact "[qty][unit] [item] /[tag]" string ending in a
+  // recognized source-switch flag (e.g. "/bro").
+  sourceTag?: string
+  sourceNote?: string
 }
 
 function blankItem(): ItemBlock {
@@ -216,6 +223,7 @@ function ItemEntryBlock({
   variantsByProduct,
   productStock,
   savedQualifiers,
+  abbreviationRules,
   onUpdate,
   onAddItem,
   onAdvanceToTotals,
@@ -226,6 +234,7 @@ function ItemEntryBlock({
   variantsByProduct: Map<number, Variant[]>
   productStock: Map<number, number>
   savedQualifiers: string[]
+  abbreviationRules: AbbreviationRule[]
   onUpdate: (patch: Partial<ItemBlock>) => void
   onAddItem: () => void
   onAdvanceToTotals: () => void
@@ -352,9 +361,28 @@ function ItemEntryBlock({
     descRef.current?.focus()
   }
 
+  // Lets the description field double as a compact order-line shorthand --
+  // "1pc 8\" st. spec. double mat /bro" -- splitting qty/unit/description
+  // out into their own fields and resolving the alias + trailing source
+  // flag, rather than requiring those to be typed into their own boxes.
+  function applyNaturalLanguageParse() {
+    const parsed = parseNaturalLanguageLine(item.query, abbreviationRules)
+    if (!parsed) return
+    onUpdate({
+      qty: parsed.qty,
+      unitAbbrev: parsed.unitAbbrev,
+      query: parsed.description,
+      selectedProduct: null,
+      selectedVariantId: null,
+      sourceTag: parsed.sourceTag ?? undefined,
+      sourceNote: parsed.sourceNote ?? undefined,
+    })
+  }
+
   function onDescriptionEnter(e: KeyboardEvent) {
     if (e.key !== 'Enter') return
     e.preventDefault()
+    applyNaturalLanguageParse()
     onAdvanceToTotals()
   }
 
@@ -419,6 +447,7 @@ function ItemEntryBlock({
             spellCheck={false}
             onChange={(e) => onUpdate({ query: e.target.value, selectedProduct: null, selectedVariantId: null })}
             onKeyDown={onDescriptionEnter}
+            onBlur={applyNaturalLanguageParse}
           />
           {/* Suggestions are only ever applied by an explicit tap/click below
               -- Enter always keeps the raw typed text, never a close match.
@@ -670,6 +699,7 @@ export function RecordSaleSheet({
   const allVariants = useLiveQuery(() => (open ? db.variants.toArray() : []), [open])
   const savedQualifierRows = useLiveQuery(() => (open ? db.customUnits.orderBy('label').toArray() : []), [open])
   const savedQualifiers = useMemo(() => (savedQualifierRows ?? []).map((r) => r.label), [savedQualifierRows])
+  const abbreviationRules = useLiveQuery(() => (open ? db.abbreviations.toArray() : []), [open]) ?? []
 
   const [viewMode, setViewMode] = useState<'single' | 'bulk'>('single')
   const [items, setItems] = useState<ItemBlock[]>([blankItem()])
@@ -1022,6 +1052,7 @@ export function RecordSaleSheet({
   ) {
     const distributedLrd = new Map<string, number>()
     const distributedUsd = new Map<string, number>()
+    const ticketVariantIds = new Set<number>()
     if (useDistribution) {
       const totalQty = valid.reduce((s, it) => s + it.qty, 0) || valid.length
       let remainingLrd = ticketTotalLrd
@@ -1181,6 +1212,8 @@ export function RecordSaleSheet({
         location: ticketLocation,
         tbs,
         pickedUp: !tbs,
+        sourceTag: line.sourceTag,
+        sourceNote: line.sourceNote,
       })
 
       if (!tbs && variantId) {
@@ -1192,6 +1225,22 @@ export function RecordSaleSheet({
               : { stockMyShop: Math.max(0, fresh.stockMyShop - line.qty) }
           await db.variants.update(variantId, { ...updated, updatedAt: Date.now() })
         }
+      }
+
+      if (variantId) ticketVariantIds.add(variantId)
+    }
+
+    // Background-only "frequently sold with" tracking: every variant
+    // checked out together on this one ticket gets every other variant's ID
+    // cross-linked into its frequentlySoldWith array, deduped. Never shown
+    // in the UI directly -- just accumulated for future statistical use.
+    if (ticketVariantIds.size > 1) {
+      for (const vid of ticketVariantIds) {
+        const others = Array.from(ticketVariantIds).filter((id) => id !== vid)
+        const fresh = await db.variants.get(vid)
+        if (!fresh) continue
+        const merged = Array.from(new Set([...(fresh.frequentlySoldWith ?? []), ...others]))
+        await db.variants.update(vid, { frequentlySoldWith: merged })
       }
     }
   }
@@ -1337,6 +1386,7 @@ export function RecordSaleSheet({
             variantsByProduct={variantsByProduct}
             productStock={productStock}
             savedQualifiers={savedQualifiers}
+            abbreviationRules={abbreviationRules}
             onUpdate={(patch) => updateItem(items[items.length - 1].key, patch)}
             onAddItem={addItem}
             onAdvanceToTotals={() => totalLrdRef.current?.focus()}

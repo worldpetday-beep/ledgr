@@ -15,6 +15,8 @@ import {
 } from '../components/icons'
 import { ItemThumb } from '../components/ItemThumb'
 import { ProductDetailView } from '../components/ProductDetailView'
+import { WarehouseLogLedger } from '../components/WarehouseLogLedger'
+import { FillMissingCostsView } from '../components/FillMissingCostsView'
 import {
   ShopifyShell,
   ShopifyHeaderIconButton,
@@ -39,20 +41,22 @@ function availableOf(variants: Variant[]): number {
 }
 
 const NEW_BADGE_WINDOW_MS = 72 * 60 * 60 * 1000
+const DEAD_STOCK_WINDOW_MS = 60 * 24 * 60 * 60 * 1000
 
 function isRecentlyNew(v: Variant): boolean {
   return !!v.isNew && !!v.newSince && Date.now() - v.newSince < NEW_BADGE_WINDOW_MS
 }
 
-type Chip = 'all' | 'lowStock' | 'missingCost' | 'sourcedVishal' | 'archived'
-type SortBy = 'name' | 'stockAsc' | 'stockDesc' | 'dateAdded'
+type Chip = 'all' | 'lowStock' | 'missingCost' | 'archived'
+type SortBy = 'name' | 'stockAsc' | 'stockDesc' | 'dateAdded' | 'salesVelocity'
 type SourceLocationFilter = 'all' | 'storeFloor' | 'warehouse'
 type PriceBaselineFilter = 'all' | 'missingSP' | 'missingCP'
 
 const SORT_OPTIONS: { value: SortBy; label: string }[] = [
-  { value: 'name', label: 'Product name (A-Z)' },
+  { value: 'name', label: 'A to Z Alphabetical' },
+  { value: 'stockDesc', label: 'Inventory Balance (High to Low)' },
+  { value: 'salesVelocity', label: 'Sales Velocity (Highest Selling First)' },
   { value: 'stockAsc', label: 'Inventory (lowest first)' },
-  { value: 'stockDesc', label: 'Inventory (highest first)' },
   { value: 'dateAdded', label: 'Date added (newest first)' },
 ]
 
@@ -79,6 +83,56 @@ function EditableCell({ label, value, onCommit }: { label: string; value: number
         onChange={(e) => setText(e.target.value)}
         onBlur={() => onCommit(Number(text) || 0)}
       />
+    </div>
+  )
+}
+
+// Stock Left gets dedicated [-]/[+] step buttons flanking the numeric
+// input, for a fast one-tap adjustment instead of always having to type a
+// new number by hand.
+function StockStepper({ value, onCommit }: { value: number; onCommit: (n: number) => void }) {
+  const [text, setText] = useState(String(value))
+
+  useEffect(() => {
+    setText(String(value))
+  }, [value])
+
+  function step(delta: number) {
+    const next = Math.max(0, (Number(text) || 0) + delta)
+    setText(String(next))
+    onCommit(next)
+  }
+
+  return (
+    <div className="flex w-28 shrink-0 flex-col gap-0.5">
+      <span className="text-[9px] font-semibold uppercase tracking-wide text-gray-400">Stock Left</span>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => step(-1)}
+          aria-label="Decrease stock"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-sm font-bold leading-none text-gray-600"
+        >
+          −
+        </button>
+        <input
+          type="number"
+          inputMode="numeric"
+          className="tabular w-10 shrink-0 rounded-md border border-gray-200 bg-gray-50 px-1 py-1 text-center text-sm font-medium text-black outline-none focus:border-black"
+          value={text}
+          onFocus={selectOnFocus}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={() => onCommit(Math.max(0, Number(text) || 0))}
+        />
+        <button
+          type="button"
+          onClick={() => step(1)}
+          aria-label="Increase stock"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-sm font-bold leading-none text-gray-600"
+        >
+          +
+        </button>
+      </div>
     </div>
   )
 }
@@ -250,7 +304,7 @@ function ProductHierarchyTable({
                 <EditableTitle value={v.label} onCommit={(next) => commitTitle(v, next)} />
                 <div className="flex shrink-0 items-center gap-2 overflow-x-auto">
                   <EditableCell label="Cost Price" value={v.costPrice} onCommit={(n) => commitCostPrice(v, n)} />
-                  <EditableCell label="Stock Left" value={v.stockMyShop} onCommit={(n) => commitStock(v, n)} />
+                  <StockStepper value={v.stockMyShop} onCommit={(n) => commitStock(v, n)} />
                 </div>
               </div>
             ))}
@@ -276,6 +330,8 @@ export default function Inventory() {
   const [filterSheetOpen, setFilterSheetOpen] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const [transferSheetOpen, setTransferSheetOpen] = useState(false)
+  const [warehouseLogOpen, setWarehouseLogOpen] = useState(false)
+  const [fillCostsOpen, setFillCostsOpen] = useState(false)
 
   const [categoryFilter, setCategoryFilter] = useState<string>('All')
   const [sourceLocationFilter, setSourceLocationFilter] = useState<SourceLocationFilter>('all')
@@ -368,16 +424,44 @@ export default function Inventory() {
     const active = (products ?? []).filter((p) => !p.archived)
     let lowStock = 0
     let missingCost = 0
-    let sourcedVishal = 0
     for (const p of active) {
       const variants = variantsByProduct.get(p.id!) ?? []
       if (variants.some((v) => isLowStock(v.stockMyShop + v.stockVishalShop, v.lowStockThreshold))) lowStock++
       if (variants.some(hasMissingCost)) missingCost++
-      if (variants.some((v) => v.stockVishalShop > 0)) sourcedVishal++
     }
     const archived = (products ?? []).filter((p) => p.archived).length
-    return { lowStock, missingCost, sourcedVishal, archived }
+    return { lowStock, missingCost, archived }
   }, [products, variantsByProduct])
+
+  // Sales history backing both the Sales Velocity sort and Dead Stock
+  // detection -- qty sold per product (all-time) and which variants have
+  // sold at all within the last 60 days.
+  const allSales = useLiveQuery(() => db.sales.toArray(), [])
+  const salesQtyByProduct = useMemo(() => {
+    const map = new Map<number, number>()
+    for (const s of allSales ?? []) {
+      if (s.productId == null) continue
+      map.set(s.productId, (map.get(s.productId) ?? 0) + s.qty)
+    }
+    return map
+  }, [allSales])
+  const recentSaleVariantIds = useMemo(() => {
+    const cutoff = Date.now() - DEAD_STOCK_WINDOW_MS
+    const set = new Set<number>()
+    for (const s of allSales ?? []) {
+      if (s.variantId != null && s.timestamp >= cutoff) set.add(s.variantId)
+    }
+    return set
+  }, [allSales])
+  // Dead Stock: every variant under this product has gone 60 days with zero
+  // sales (a product with no variants at all isn't "dead", just empty).
+  function isDeadStockProduct(product: Product): boolean {
+    const variants = variantsByProduct.get(product.id!) ?? []
+    return variants.length > 0 && variants.every((v) => !recentSaleVariantIds.has(v.id!))
+  }
+
+  const [isolateDeadStock, setIsolateDeadStock] = useState(false)
+  const [deadStockDrawerOpen, setDeadStockDrawerOpen] = useState(false)
 
   // Flat, group-nested table: every product is listed (grouped visually by
   // its own variants beneath it) -- always sorted, never bucketed into a
@@ -395,8 +479,6 @@ export default function Inventory() {
         )
       } else if (activeChip === 'missingCost') {
         list = list.filter((p) => (variantsByProduct.get(p.id!) ?? []).some(hasMissingCost))
-      } else if (activeChip === 'sourcedVishal') {
-        list = list.filter((p) => (variantsByProduct.get(p.id!) ?? []).some((v) => v.stockVishalShop > 0))
       }
     }
 
@@ -427,8 +509,21 @@ export default function Inventory() {
     else if (sortBy === 'stockAsc') sorted.sort((a, b) => availableOf(variantsByProduct.get(a.id!) ?? []) - availableOf(variantsByProduct.get(b.id!) ?? []))
     else if (sortBy === 'stockDesc') sorted.sort((a, b) => availableOf(variantsByProduct.get(b.id!) ?? []) - availableOf(variantsByProduct.get(a.id!) ?? []))
     else if (sortBy === 'dateAdded') sorted.sort((a, b) => b.createdAt - a.createdAt)
+    else if (sortBy === 'salesVelocity') sorted.sort((a, b) => (salesQtyByProduct.get(b.id!) ?? 0) - (salesQtyByProduct.get(a.id!) ?? 0))
     return sorted
-  }, [products, query, activeChip, categoryFilter, sourceLocationFilter, priceBaselineFilter, sortBy, variantsByProduct])
+  }, [products, query, activeChip, categoryFilter, sourceLocationFilter, priceBaselineFilter, sortBy, variantsByProduct, salesQtyByProduct])
+
+  // When isolating dead stock, products that are fully dead (every variant
+  // has gone 60 days with zero sales) drop out of the main list entirely
+  // and collect in a separate collapsible drawer below.
+  const { activeList, deadStockList } = useMemo(() => {
+    if (!isolateDeadStock) return { activeList: filtered, deadStockList: [] as Product[] }
+    const active: Product[] = []
+    const dead: Product[] = []
+    for (const p of filtered) (isDeadStockProduct(p) ? dead : active).push(p)
+    return { activeList: active, deadStockList: dead }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, isolateDeadStock, recentSaleVariantIds, variantsByProduct])
 
   const transferVariantOptions = transferProductId ? variantsByProduct.get(transferProductId) ?? [] : []
 
@@ -604,7 +699,6 @@ export default function Inventory() {
     { key: 'all', label: 'All', count: 0 },
     { key: 'lowStock', label: 'Low stock', count: chipCounts.lowStock },
     { key: 'missingCost', label: 'Missing cost', count: chipCounts.missingCost },
-    { key: 'sourcedVishal', label: 'Sourced (Vishal)', count: chipCounts.sourcedVishal },
     { key: 'archived', label: 'Archived', count: chipCounts.archived },
   ]
 
@@ -680,6 +774,13 @@ export default function Inventory() {
               {chip.count > 0 ? ` (${chip.count})` : ''}
             </button>
           ))}
+          <button
+            onClick={() => setIsolateDeadStock((v) => !v)}
+            className={shopifyChipClass(isolateDeadStock)}
+            title="Segregate variants with zero sales in the last 60 days into a separate drawer"
+          >
+            Isolate Dead Stock
+          </button>
         </div>
 
         {visibleDuplicateGroups.length > 0 && (
@@ -704,15 +805,42 @@ export default function Inventory() {
         )}
 
         <ProductHierarchyTable
-          products={filtered}
+          products={activeList}
           variantsByProduct={variantsByProduct}
           selectedIds={selectedIds}
           onTapProduct={(id) => setDetailProductId(id)}
           onToggleSelected={toggleSelected}
           autoExpandId={lastLinkedProductId}
         />
-        {filtered.length === 0 && (
+        {activeList.length === 0 && deadStockList.length === 0 && (
           <p className="py-10 text-center text-sm text-gray-500">No products match. Tap + above to add one.</p>
+        )}
+
+        {/* Dead Stock drawer -- only rendered while isolating, collapsed by
+            default so the segregated items stay out of the way until
+            deliberately reviewed. */}
+        {isolateDeadStock && deadStockList.length > 0 && (
+          <div className="overflow-hidden rounded-xl border border-amber-200">
+            <button
+              onClick={() => setDeadStockDrawerOpen((v) => !v)}
+              className="flex w-full items-center justify-between bg-amber-50 px-3 py-2.5 text-left"
+            >
+              <span className="text-sm font-semibold text-amber-800">Dead Stock ({deadStockList.length})</span>
+              <ChevronRightIcon className={`h-4 w-4 text-amber-500 transition-transform ${deadStockDrawerOpen ? 'rotate-90' : ''}`} />
+            </button>
+            {deadStockDrawerOpen && (
+              <div className="p-2">
+                <ProductHierarchyTable
+                  products={deadStockList}
+                  variantsByProduct={variantsByProduct}
+                  selectedIds={selectedIds}
+                  onTapProduct={(id) => setDetailProductId(id)}
+                  onToggleSelected={toggleSelected}
+                  autoExpandId={lastLinkedProductId}
+                />
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -808,6 +936,26 @@ export default function Inventory() {
           <button
             onClick={() => {
               setMoreMenuOpen(false)
+              setWarehouseLogOpen(true)
+            }}
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+          >
+            <BoxesIcon className="h-5 w-5 text-gray-500" />
+            Warehouse Log Ledger
+          </button>
+          <button
+            onClick={() => {
+              setMoreMenuOpen(false)
+              setFillCostsOpen(true)
+            }}
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+          >
+            <SettingsIcon className="h-5 w-5 text-gray-500" />
+            Fill Missing Costs
+          </button>
+          <button
+            onClick={() => {
+              setMoreMenuOpen(false)
               openUnitsEditor(categoryFilter !== 'All' ? categoryFilter : allCategories[0])
             }}
             className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
@@ -817,6 +965,9 @@ export default function Inventory() {
           </button>
         </div>
       </BottomSheet>
+
+      {warehouseLogOpen && <WarehouseLogLedger onClose={() => setWarehouseLogOpen(false)} />}
+      {fillCostsOpen && <FillMissingCostsView onClose={() => setFillCostsOpen(false)} />}
 
       {/* Warehouse Book (Vishal) — internal stock transfer, relocated off the main feed */}
       <BottomSheet open={transferSheetOpen} onClose={() => setTransferSheetOpen(false)}>
