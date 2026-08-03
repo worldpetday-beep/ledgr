@@ -14,7 +14,7 @@ export interface TicketLineSummary {
 // new one -- the main guard against accidentally re-entering the same
 // ledger line twice in a row.
 function RecentSalesReference() {
-  const recent = useLiveQuery(() => db.sales.orderBy('timestamp').reverse().limit(2).toArray(), [])
+  const recent = useLiveQuery(() => db.sales.orderBy('timestamp').reverse().filter((s) => !s.voidedAt).limit(2).toArray(), [])
   if (!recent || recent.length === 0) return null
 
   return (

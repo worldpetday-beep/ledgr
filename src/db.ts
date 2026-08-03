@@ -97,6 +97,11 @@ export interface Sale {
   // explanation shown wherever the sale is reviewed.
   sourceTag?: string
   sourceNote?: string
+  // Soft-delete marker: "removing" a sale line (from today's ledger or the
+  // Book Tab's full history) never actually erases the row -- it's stamped
+  // voided instead so historical data is always recoverable/auditable.
+  // Every read path across the app filters these out of totals/lists.
+  voidedAt?: number
 }
 
 export interface Category {
@@ -470,7 +475,7 @@ export async function releaseOrderNumberIfLatest(orderNumber: number): Promise<v
     const row = await db.settings.get(NEXT_ORDER_NUMBER_KEY)
     const nextToIssue = row ? parseInt(row.value, 10) : ORDER_NUMBER_BASE
     if (orderNumber !== nextToIssue - 1) return
-    const stillReferenced = await db.sales.where('orderNumber').equals(orderNumber).count()
+    const stillReferenced = await db.sales.where('orderNumber').equals(orderNumber).and((s) => !s.voidedAt).count()
     if (stillReferenced === 0) {
       await db.settings.put({ key: NEXT_ORDER_NUMBER_KEY, value: String(orderNumber) })
     }

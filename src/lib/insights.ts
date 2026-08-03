@@ -1,5 +1,6 @@
 import { db, type Currency, type Sale } from '../db'
 import { dateKeyMonrovia, formatDateMonrovia, money, startOfDay, endOfDay } from './format'
+import { withoutVoided } from './salesLedger'
 
 function customerLabel(sale: Sale): string {
   return sale.customerName || `Customer ${String(sale.customerNumber).padStart(3, '0')}`
@@ -64,7 +65,7 @@ export async function answerInsightQuery(query: string): Promise<string> {
 }
 
 async function answerTopDay(): Promise<string> {
-  const sales = await db.sales.toArray()
+  const sales = withoutVoided(await db.sales.toArray())
   if (sales.length === 0) return 'No sales recorded yet.'
 
   const byDay = new Map<string, Partial<Record<Currency, number>>>()
@@ -90,7 +91,7 @@ async function answerTopDay(): Promise<string> {
 }
 
 async function answerTopCustomer(): Promise<string> {
-  const sales = await db.sales.toArray()
+  const sales = withoutVoided(await db.sales.toArray())
   if (sales.length === 0) return 'No sales recorded yet.'
 
   const byCustomer = new Map<number, { label: string; totals: Partial<Record<Currency, number>>; orders: Set<number> }>()
@@ -141,7 +142,7 @@ async function answerTotalsForPeriod(q: string): Promise<string> {
     label = 'the last 30 days'
   }
 
-  const sales = await db.sales.where('timestamp').between(from, to, true, true).toArray()
+  const sales = withoutVoided(await db.sales.where('timestamp').between(from, to, true, true).toArray())
   const totals: Partial<Record<Currency, number>> = {}
   for (const s of sales) addSaleAmounts(totals, s)
   const parts = (Object.entries(totals) as [Currency, number][]).map(([c, amt]) => money(amt, c))
@@ -171,7 +172,7 @@ async function answerCustomerLookup(q: string): Promise<string> {
   }
 
   const from = daysAgo(daysBack)
-  const sales = await db.sales.where('timestamp').aboveOrEqual(from).toArray()
+  const sales = withoutVoided(await db.sales.where('timestamp').aboveOrEqual(from).toArray())
   const matching = sales.filter((s) => {
     const haystack = `${s.itemName} ${s.variant ?? ''} ${s.unitType ?? ''}`.toLowerCase()
     return keywords.some((k) => haystack.includes(k))

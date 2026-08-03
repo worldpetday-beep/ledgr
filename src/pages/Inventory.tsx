@@ -26,6 +26,7 @@ import {
   shopifyIconButtonClass,
 } from '../components/ShopifyShell'
 import { isLowStock, selectOnFocus } from '../lib/format'
+import { withoutVoided } from '../lib/salesLedger'
 import { tokenSortKey } from '../lib/itemMatch'
 import { useAppActions } from '../context/AppActions'
 import { format } from 'date-fns'
@@ -437,7 +438,8 @@ export default function Inventory() {
   // Sales history backing both the Sales Velocity sort and Dead Stock
   // detection -- qty sold per product (all-time) and which variants have
   // sold at all within the last 60 days.
-  const allSales = useLiveQuery(() => db.sales.toArray(), [])
+  const allSalesRaw = useLiveQuery(() => db.sales.toArray(), [])
+  const allSales = useMemo(() => withoutVoided(allSalesRaw ?? []), [allSalesRaw])
   const salesQtyByProduct = useMemo(() => {
     const map = new Map<number, number>()
     for (const s of allSales ?? []) {

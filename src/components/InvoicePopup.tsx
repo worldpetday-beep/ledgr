@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, profitOf, type Sale, type Variant } from '../db'
+import { db, profitOf, type Product, type Sale, type Variant } from '../db'
 import { BottomSheet } from './ui'
-import { AlertIcon, TrashIcon } from './icons'
+import { AlertIcon, TrashIcon, SearchIcon } from './icons'
 import { money, formatDateTimeMonrovia, selectOnFocus } from '../lib/format'
-import { lrdAmountOf, usdAmountOf, deleteSaleLine, editSaleLine } from '../lib/salesLedger'
+import { lrdAmountOf, usdAmountOf, deleteSaleLine, editSaleLine, relinkSaleLine } from '../lib/salesLedger'
 
 export interface InvoiceOrder {
   orderNumber: number
@@ -28,11 +28,44 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
   const [qty, setQty] = useState(String(sale.qty))
   const [usdAmount, setUsdAmount] = useState(usdAmountOf(sale) > 0 ? String(usdAmountOf(sale)) : '')
   const [lrdAmount, setLrdAmount] = useState(lrdAmountOf(sale) > 0 ? String(lrdAmountOf(sale)) : '')
+  const [costAtSale, setCostAtSale] = useState(String(sale.costAtSale || ''))
   const [busy, setBusy] = useState(false)
+  const [relinkOpen, setRelinkOpen] = useState(false)
+  const [relinkQuery, setRelinkQuery] = useState('')
 
   const qtyNum = Number(qty) || 0
   const unitPriceMissing = sale.soldFor <= 0
   const unitPrice = qtyNum > 0 ? sale.soldFor / qtyNum : 0
+
+  // Only loaded once the relink search is actually opened -- every other
+  // order/line editor stays cheap.
+  const allProducts = useLiveQuery(() => (relinkOpen ? db.products.toArray() : []), [relinkOpen])
+  const allVariants = useLiveQuery(() => (relinkOpen ? db.variants.toArray() : []), [relinkOpen])
+  const variantsByProduct = useMemo(() => {
+    const map = new Map<number, Variant[]>()
+    for (const v of allVariants ?? []) map.set(v.productId, [...(map.get(v.productId) ?? []), v])
+    return map
+  }, [allVariants])
+
+  const relinkResults = useMemo(() => {
+    const q = relinkQuery.trim().toLowerCase()
+    if (!q) return []
+    const results: { product: Product; variant: Variant | null; label: string }[] = []
+    for (const p of allProducts ?? []) {
+      if (p.archived) continue
+      const variants = variantsByProduct.get(p.id!) ?? []
+      if (variants.length <= 1) {
+        if (p.name.toLowerCase().includes(q)) results.push({ product: p, variant: variants[0] ?? null, label: p.name })
+      } else {
+        for (const v of variants) {
+          if (v.label.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)) {
+            results.push({ product: p, variant: v, label: `${p.name} — ${v.label}` })
+          }
+        }
+      }
+    }
+    return results.slice(0, 8)
+  }, [allProducts, variantsByProduct, relinkQuery])
 
   async function commit() {
     setBusy(true)
@@ -43,6 +76,7 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
       lrdAmount: Number(lrdAmount) || 0,
       location: sale.location,
       itemName: itemName.trim() || sale.itemName,
+      costAtSale: Number(costAtSale) || 0,
     })
     setBusy(false)
   }
@@ -51,6 +85,14 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
     setBusy(true)
     await deleteSaleLine(sale)
     setBusy(false)
+  }
+
+  async function relinkTo(product: Product, variant: Variant | null) {
+    setBusy(true)
+    await relinkSaleLine(sale, product, variant)
+    setBusy(false)
+    setRelinkOpen(false)
+    setRelinkQuery('')
   }
 
   return (
@@ -76,6 +118,41 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
           <TrashIcon className="h-4 w-4" />
         </button>
       </div>
+
+      <button
+        type="button"
+        onClick={() => setRelinkOpen((v) => !v)}
+        className="mt-2 flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-900"
+      >
+        <SearchIcon className="h-3 w-3" />
+        {relinkOpen ? 'Cancel' : 'Relink to a different product'}
+      </button>
+      {relinkOpen && (
+        <div className="mt-1.5">
+          <input
+            autoFocus
+            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+            placeholder="Search products…"
+            value={relinkQuery}
+            onChange={(e) => setRelinkQuery(e.target.value)}
+          />
+          {relinkResults.length > 0 && (
+            <div className="mt-1 flex flex-col overflow-hidden rounded-lg border border-slate-200">
+              {relinkResults.map((r) => (
+                <button
+                  key={`${r.product.id}-${r.variant?.id ?? 'none'}`}
+                  type="button"
+                  onClick={() => relinkTo(r.product, r.variant)}
+                  disabled={busy}
+                  className="border-t border-slate-100 px-2.5 py-2 text-left text-sm text-slate-900 first:border-t-0 hover:bg-slate-50"
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mt-2 flex items-center justify-between text-sm">
         <span className="text-slate-500">Unit price</span>
@@ -117,6 +194,22 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
             onBlur={commit}
           />
         </div>
+      </div>
+
+      <div className="mt-2">
+        <label className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Cost at sale (total, for profit calc)</label>
+        <input
+          type="number"
+          min={0}
+          step="0.01"
+          inputMode="decimal"
+          className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+          placeholder="0.00"
+          value={costAtSale}
+          onFocus={selectOnFocus}
+          onChange={(e) => setCostAtSale(e.target.value)}
+          onBlur={commit}
+        />
       </div>
     </div>
   )

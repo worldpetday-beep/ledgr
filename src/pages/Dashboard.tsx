@@ -4,7 +4,7 @@ import { db, profitOf, type Currency } from '../db'
 import { Card, Badge, BottomSheet, Field, Button, inputClass } from '../components/ui'
 import { AlertIcon } from '../components/icons'
 import { money, dateKeyMonrovia, isLowStock } from '../lib/format'
-import { lrdAmountOf, usdAmountOf } from '../lib/salesLedger'
+import { lrdAmountOf, usdAmountOf, withoutVoided } from '../lib/salesLedger'
 import { Link } from 'react-router-dom'
 import {
   ResponsiveContainer,
@@ -80,7 +80,8 @@ export default function Dashboard() {
 
   // Reactive query models -- every widget below recomputes the instant the
   // date filter (or the underlying data) changes.
-  const salesInRange = useLiveQuery(() => db.sales.where('timestamp').between(start, end, true, true).toArray(), [start, end])
+  const salesInRangeRaw = useLiveQuery(() => db.sales.where('timestamp').between(start, end, true, true).toArray(), [start, end])
+  const salesInRange = useMemo(() => withoutVoided(salesInRangeRaw ?? []), [salesInRangeRaw])
   const drawerCountsInRange = useLiveQuery(
     () => db.drawerCounts.where('timestamp').between(start, end, true, true).toArray(),
     [start, end],
@@ -145,7 +146,7 @@ export default function Dashboard() {
 
   const trend = useLiveQuery(async () => {
     const from = monroviaDayStart(subDays(Date.now(), 13).getTime())
-    const rows = await db.sales.where('timestamp').aboveOrEqual(from).toArray()
+    const rows = withoutVoided(await db.sales.where('timestamp').aboveOrEqual(from).toArray())
     const byDay = new Map<string, number>()
     for (let i = 13; i >= 0; i--) {
       const key = format(subDays(Date.now(), i), 'MMM d')

@@ -1,4 +1,4 @@
-import { db, releaseOrderNumberIfLatest, type Currency, type FulfillmentLocation, type Sale } from '../db'
+import { db, releaseOrderNumberIfLatest, type Currency, type FulfillmentLocation, type Product, type Sale, type Variant } from '../db'
 
 // A single sale line can carry a primary currency+amount and, for a
 // split-currency payment, a secondary currency+amount. These pull out
@@ -20,12 +20,21 @@ export function customerLabelOf(sale: Pick<Sale, 'customerNumber' | 'customerNam
   return sale.customerName || `Customer ${String(sale.customerNumber).padStart(3, '0')}`
 }
 
-// Deletes a sale line, restoring stock to wherever it was originally
-// deducted from, and recycles the order number if that was the last line of
-// the most-recently-issued order (no-op otherwise).
+// Every list/total across the app reads through this instead of raw
+// db.sales.toArray() results, so a voided line never has to be individually
+// excluded at each call site.
+export function withoutVoided(sales: Sale[]): Sale[] {
+  return sales.filter((s) => !s.voidedAt)
+}
+
+// "Removes" a sale line without ever erasing it: stock is restored exactly
+// like a real delete would, the order number is recycled the same way, but
+// the row itself is only stamped voidedAt, not dropped from the table --
+// the full history stays intact and recoverable, it's just filtered out of
+// every normal view via withoutVoided().
 export async function deleteSaleLine(sale: Sale): Promise<void> {
   await db.transaction('rw', db.sales, db.variants, async () => {
-    await db.sales.delete(sale.id!)
+    await db.sales.update(sale.id!, { voidedAt: Date.now() })
     const stockWasDeducted = !sale.tbs || sale.pickedUp
     if (stockWasDeducted && sale.variantId) {
       const variant = await db.variants.get(sale.variantId)
@@ -64,6 +73,7 @@ export interface SaleEditPatch {
   lrdAmount: number
   location: FulfillmentLocation
   itemName?: string
+  costAtSale?: number
 }
 
 // Edits an already-recorded sale line's qty/unit/price/location. Stock is
@@ -106,6 +116,49 @@ export async function editSaleLine(sale: Sale, patch: SaleEditPatch): Promise<vo
       secondaryCurrency: hasSecondary ? 'LRD' : undefined,
       location: patch.location,
       ...(patch.itemName !== undefined ? { itemName: patch.itemName } : {}),
+      ...(patch.costAtSale !== undefined ? { costAtSale: patch.costAtSale } : {}),
+    })
+  })
+}
+
+// Re-points an already-recorded sale line at a different product/variant --
+// "products to prices and all" reeditability, not just the free-text name.
+// Whatever stock the original line deducted is restored to the OLD variant
+// first, then the same qty is deducted from the NEW variant, so inventory
+// stays correct no matter how far off the original match was. costAtSale is
+// refreshed from the new variant's current cost price (qty-scaled) since the
+// line now genuinely represents a different item.
+export async function relinkSaleLine(sale: Sale, product: Product, variant: Variant | null): Promise<void> {
+  await db.transaction('rw', db.sales, db.variants, async () => {
+    const stockAffected = !sale.tbs || sale.pickedUp
+    if (stockAffected && sale.variantId) {
+      const oldVariant = await db.variants.get(sale.variantId)
+      if (oldVariant) {
+        const restored =
+          sale.location === 'vishalShop'
+            ? { stockVishalShop: oldVariant.stockVishalShop + sale.qty }
+            : { stockMyShop: oldVariant.stockMyShop + sale.qty }
+        await db.variants.update(sale.variantId, { ...restored, updatedAt: Date.now() })
+      }
+    }
+    if (stockAffected && variant?.id != null) {
+      const freshNewVariant = await db.variants.get(variant.id)
+      if (freshNewVariant) {
+        const deducted =
+          sale.location === 'vishalShop'
+            ? { stockVishalShop: Math.max(0, freshNewVariant.stockVishalShop - sale.qty) }
+            : { stockMyShop: Math.max(0, freshNewVariant.stockMyShop - sale.qty) }
+        await db.variants.update(variant.id, { ...deducted, updatedAt: Date.now() })
+      }
+    }
+
+    await db.sales.update(sale.id!, {
+      productId: product.id,
+      variantId: variant?.id,
+      itemName: product.name,
+      category: product.category,
+      variant: variant && variant.label !== 'Standard' ? variant.label : undefined,
+      costAtSale: variant ? variant.costPrice * sale.qty : sale.costAtSale,
     })
   })
 }

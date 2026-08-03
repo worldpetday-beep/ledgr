@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type Currency } from '../db'
 import { Card, Button, inputClass } from '../components/ui'
-import { money, startOfDay, selectOnFocus, formatDateTimeMonrovia } from '../lib/format'
+import { money, startOfDay, selectOnFocus, formatDateTimeMonrovia, formatDateMonrovia } from '../lib/format'
+import { withoutVoided } from '../lib/salesLedger'
 import { subDays } from 'date-fns'
 import {
   ResponsiveContainer,
@@ -30,22 +31,25 @@ export default function Analytics() {
 
   const from = startOfDay(subDays(Date.now(), rangeDays - 1).getTime())
 
-  const sales = useLiveQuery(
+  const salesRaw = useLiveQuery(
     () => db.sales.where('timestamp').aboveOrEqual(from).and((s) => s.currency === currency).toArray(),
     [from, currency],
   )
+  const sales = useMemo(() => withoutVoided(salesRaw ?? []), [salesRaw])
 
   // Money overview: ledger revenue for the selected range, the all-time
   // running total (grows automatically as sales are recorded), and a manual
   // drawer cash count for reconciliation.
-  const rangeSalesAllCurrencies = useLiveQuery(() => db.sales.where('timestamp').aboveOrEqual(from).toArray(), [from])
+  const rangeSalesAllCurrenciesRaw = useLiveQuery(() => db.sales.where('timestamp').aboveOrEqual(from).toArray(), [from])
+  const rangeSalesAllCurrencies = useMemo(() => withoutVoided(rangeSalesAllCurrenciesRaw ?? []), [rangeSalesAllCurrenciesRaw])
   const rangeTotals = useMemo(() => {
     const t: Record<Currency, number> = { USD: 0, LRD: 0 }
     for (const s of rangeSalesAllCurrencies ?? []) t[s.currency] += s.soldFor
     return t
   }, [rangeSalesAllCurrencies])
 
-  const allSales = useLiveQuery(() => db.sales.toArray(), [])
+  const allSalesRaw = useLiveQuery(() => db.sales.toArray(), [])
+  const allSales = useMemo(() => withoutVoided(allSalesRaw ?? []), [allSalesRaw])
   const allTimeTotals = useMemo(() => {
     const t: Record<Currency, number> = { USD: 0, LRD: 0 }
     for (const s of allSales ?? []) t[s.currency] += s.soldFor
@@ -74,6 +78,20 @@ export default function Analytics() {
     setLrdActual('')
     setCountNote('')
   }
+
+  // Product sold-price lookup -- always searches the *full* history
+  // (not the range/currency-limited `sales` above), since "what did this
+  // sell for last time" is a question about the whole ledger, not just
+  // whatever window happens to be selected up top.
+  const [priceSearch, setPriceSearch] = useState('')
+  const priceSearchResults = useMemo(() => {
+    const q = priceSearch.trim().toLowerCase()
+    if (!q) return []
+    return allSales
+      .filter((s) => s.itemName.toLowerCase().includes(q))
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 25)
+  }, [allSales, priceSearch])
 
   const topItems = useMemo(() => {
     const byItem = new Map<string, number>()
@@ -243,6 +261,40 @@ export default function Analytics() {
           </p>
         </Card>
       )}
+
+      <Card>
+        <h2 className="mb-1 text-sm font-semibold">Product sold-price lookup</h2>
+        <p className="mb-3 text-xs text-[var(--text-muted)]">
+          Search the full sales history (every past day, not just the range above) to see what a product actually sold for.
+        </p>
+        <input
+          className={inputClass}
+          placeholder="Search by item name…"
+          value={priceSearch}
+          onChange={(e) => setPriceSearch(e.target.value)}
+        />
+        {priceSearch.trim() && (
+          <div className="mt-3 flex flex-col divide-y divide-[var(--gridline)]">
+            {priceSearchResults.map((s) => (
+              <div key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <div className="truncate font-medium">
+                    {s.itemName}
+                    {s.variant ? ` — ${s.variant}` : ''}
+                  </div>
+                  <div className="text-xs text-[var(--text-muted)]">
+                    {formatDateMonrovia(s.timestamp)} · qty {s.qty}
+                  </div>
+                </div>
+                <div className="tabular shrink-0 text-right font-semibold">{money(s.soldFor, s.currency)}</div>
+              </div>
+            ))}
+            {priceSearchResults.length === 0 && (
+              <p className="py-4 text-center text-sm text-[var(--text-muted)]">No past sales match "{priceSearch.trim()}".</p>
+            )}
+          </div>
+        )}
+      </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>

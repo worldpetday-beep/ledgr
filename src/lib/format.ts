@@ -42,6 +42,12 @@ export function formatDateMonrovia(ts: number): string {
   })
 }
 
+// Compact per-order-card date, e.g. "Jul 22" -- paired with the existing
+// time formatter on multi-day order lists (Shopify-orders-page style).
+export function formatShortDateMonrovia(ts: number): string {
+  return new Date(ts).toLocaleDateString('en-US', { timeZone: MONROVIA_TZ, month: 'short', day: 'numeric' })
+}
+
 // Stable sortable/comparable key for "which Monrovia calendar day is this
 // timestamp in" — used to group a list of timestamps by date.
 export function dateKeyMonrovia(ts: number): string {

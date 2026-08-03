@@ -17,7 +17,15 @@ import { LedgerPushReviewPanel, type TicketLineSummary } from './LedgerPushRevie
 import { SearchIcon, PlusIcon, TrashIcon, XIcon } from './icons'
 import { money, selectOnFocus, dateKeyMonrovia } from '../lib/format'
 import { itemSearchMatches } from '../lib/itemMatch'
-import { parseNaturalLanguageLine } from '../lib/naturalLanguageOrder'
+import { withoutVoided } from '../lib/salesLedger'
+import {
+  parseNaturalLanguageLine,
+  splitOrderLines,
+  fuzzyMatchProducts,
+  confidenceOf,
+  type MatchConfidence,
+  type ProductMatchCandidate,
+} from '../lib/naturalLanguageOrder'
 
 interface ItemBlock {
   key: string
@@ -35,6 +43,10 @@ interface ItemBlock {
   // recognized source-switch flag (e.g. "/bro").
   sourceTag?: string
   sourceNote?: string
+  // Transient, UI-only confidence flag set by the fuzzy product matcher when
+  // this row was resolved from typed/pasted text -- never persisted to the
+  // Sale row, just drives the "tap to confirm" badge on committed rows.
+  matchStatus?: MatchConfidence
 }
 
 function blankItem(): ItemBlock {
@@ -117,17 +129,8 @@ interface PersistedItem {
   lrdAmount: string
 }
 
-interface PersistedBulkTicket {
-  key: string
-  rows: PersistedItem[]
-  totalLrd: string
-  totalUsd: string
-}
-
 interface PersistedDraft {
-  viewMode: 'single' | 'bulk'
   items: PersistedItem[]
-  bulkTickets: PersistedBulkTicket[]
   location: FulfillmentLocation
   totalLrd: string
   totalUsd: string
@@ -168,41 +171,40 @@ function clearDraftFromStorage() {
   }
 }
 
-function draftHasContent(draft: Pick<PersistedDraft, 'items' | 'bulkTickets'>): boolean {
-  return draft.items.some((it) => it.query.trim()) || draft.bulkTickets.some((t) => t.rows.some((r) => r.query.trim()))
+function draftHasContent(draft: Pick<PersistedDraft, 'items'>): boolean {
+  return draft.items.some((it) => it.query.trim())
 }
 
 function unitLabel(item: { unitType: string; customUnit: string }): string {
   return item.unitType === 'Other' ? item.customUnit.trim() || 'unit' : item.unitType
 }
 
-// Bulk Book View: one independent customer session stacked in the same
-// modal. Rows reuse the ItemBlock shape (qty + free-text description via
-// `query`) -- bulk rows never carry their own price, only the ticket-level
-// total, so `usdAmount`/`lrdAmount` stay unused placeholders here.
-interface BulkTicket {
-  key: string
-  rows: ItemBlock[]
-  totalLrd: string
-  totalUsd: string
-  lastAddedRowKey: string | null
-}
-
-function blankBulkTicket(): BulkTicket {
-  const row = blankItem()
-  return { key: `ticket-${Date.now()}-${Math.random().toString(36).slice(2)}`, rows: [row], totalLrd: '', totalUsd: '', lastAddedRowKey: row.key }
-}
-
 // A committed item renders as a compact one-line summary pinned above the
-// active row, purely for visual reference -- tapping the trash icon is the
-// only interaction it offers; editing happens only in the active row.
-function CommittedItemRow({ item, onRemove }: { item: ItemBlock; onRemove: () => void }) {
+// active row, purely for visual reference by default -- but a row the fuzzy
+// matcher couldn't confidently resolve (typed/pasted via the comma-batch
+// path) carries a "tap to confirm" badge, and tapping the row body reopens
+// it as the active, editable row (with the normal suggestion dropdown) so
+// the match can actually be confirmed or corrected instead of silently
+// becoming a brand-new product.
+function CommittedItemRow({ item, onReopen, onRemove }: { item: ItemBlock; onReopen: () => void; onRemove: () => void }) {
   const name = item.selectedProduct ? item.selectedProduct.name : item.query.trim()
+  const needsConfirm = item.matchStatus === 'suggested' || item.matchStatus === 'new'
   return (
-    <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-3 py-2 text-sm">
-      <span className="min-w-0 truncate">
-        {item.qty} {unitLabel(item)} · {name}
-      </span>
+    <div
+      className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm ${
+        needsConfirm ? 'border-amber-300 bg-amber-50' : 'border-[var(--border)] bg-[var(--page-plane)]'
+      }`}
+    >
+      <button type="button" onClick={onReopen} className="flex min-w-0 flex-1 flex-col items-start text-left">
+        <span className="min-w-0 truncate">
+          {item.qty} {unitLabel(item)} · {name}
+        </span>
+        {needsConfirm && (
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+            {item.matchStatus === 'suggested' ? 'Possible match — tap to confirm' : 'New item — tap to confirm'}
+          </span>
+        )}
+      </button>
       <button onClick={onRemove} aria-label="Remove item" className="shrink-0 text-[var(--text-muted)] hover:text-[var(--status-critical)]">
         <TrashIcon className="h-4 w-4" />
       </button>
@@ -226,6 +228,7 @@ function ItemEntryBlock({
   abbreviationRules,
   onUpdate,
   onAddItem,
+  onCommitQuickItems,
   onAdvanceToTotals,
 }: {
   item: ItemBlock
@@ -237,6 +240,7 @@ function ItemEntryBlock({
   abbreviationRules: AbbreviationRule[]
   onUpdate: (patch: Partial<ItemBlock>) => void
   onAddItem: () => void
+  onCommitQuickItems: (raw: string) => void
   onAdvanceToTotals: () => void
 }) {
   const qtyRef = useRef<HTMLInputElement>(null)
@@ -302,11 +306,35 @@ function ItemEntryBlock({
         }
       }
     }
+    // Substring search alone misses typos ("tir" vs "tire") -- when it
+    // comes up thin, fold in the fuzzy/typo-tolerant matcher's top
+    // candidates too (deduped against what's already there), so a
+    // misspelled description still surfaces the right product to confirm.
+    if (results.length < 4) {
+      const seen = new Set(results.map((r) => r.key))
+      const fuzzy: ProductMatchCandidate[] = fuzzyMatchProducts(q, products, variantsByProduct)
+      for (const f of fuzzy) {
+        if (f.score < 0.6) continue
+        const key = `${f.product.id}-${f.variant?.id ?? 'none'}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        results.push({
+          key,
+          product: f.product,
+          variant: f.variant,
+          variantLabel: f.variant ? f.variant.label : f.product.name,
+          masterName: f.variant && f.variant.label !== f.product.name ? f.product.name : null,
+          stock: f.variant ? f.variant.stockMyShop + f.variant.stockVishalShop : productStock.get(f.product.id!) ?? 0,
+          costPrice: f.variant?.costPrice ?? 0,
+          costKnown: f.variant ? !f.variant.costUnknown && f.variant.costPrice > 0 : false,
+        })
+      }
+    }
     return results.slice(0, 8)
   }, [products, variantsByProduct, productStock, item.query])
 
   function pickSuggestion(s: ItemSuggestion) {
-    onUpdate({ selectedProduct: s.product, selectedVariantId: s.variant?.id ?? null, query: s.variantLabel })
+    onUpdate({ selectedProduct: s.product, selectedVariantId: s.variant?.id ?? null, query: s.variantLabel, matchStatus: 'linked' })
   }
 
   // "+ Create New Variant" -- fires a background write to actually
@@ -345,7 +373,7 @@ function ItemEntryBlock({
       updatedAt: now,
     })) as number
     const product: Product = { id: productId, name, category: 'General', description: '', images: [], options: [], archived: false, createdAt: now, updatedAt: now }
-    onUpdate({ selectedProduct: product, selectedVariantId: variantId, query: name })
+    onUpdate({ selectedProduct: product, selectedVariantId: variantId, query: name, matchStatus: 'linked' })
   }
 
   function onQtyEnter(e: KeyboardEvent) {
@@ -363,25 +391,38 @@ function ItemEntryBlock({
 
   // Lets the description field double as a compact order-line shorthand --
   // "1pc 8\" st. spec. double mat /bro" -- splitting qty/unit/description
-  // out into their own fields and resolving the alias + trailing source
-  // flag, rather than requiring those to be typed into their own boxes.
+  // out into their own fields, resolving the alias + trailing source flag,
+  // and fuzzy-matching the result against the live catalog so a typo like
+  // "tir" still confidently auto-links to an existing "...Tire" product
+  // instead of always falling through to free text.
   function applyNaturalLanguageParse() {
     const parsed = parseNaturalLanguageLine(item.query, abbreviationRules)
     if (!parsed) return
+    const candidates = fuzzyMatchProducts(parsed.description, products, variantsByProduct)
+    const status = confidenceOf(candidates)
+    const top = candidates[0]
     onUpdate({
       qty: parsed.qty,
       unitAbbrev: parsed.unitAbbrev,
-      query: parsed.description,
-      selectedProduct: null,
-      selectedVariantId: null,
+      query: status === 'linked' && top ? top.label : parsed.description,
+      selectedProduct: status === 'linked' && top ? top.product : null,
+      selectedVariantId: status === 'linked' && top ? top.variant?.id ?? null : null,
       sourceTag: parsed.sourceTag ?? undefined,
       sourceNote: parsed.sourceNote ?? undefined,
+      matchStatus: status,
     })
   }
 
   function onDescriptionEnter(e: KeyboardEvent) {
     if (e.key !== 'Enter') return
     e.preventDefault()
+    // A comma means multiple items typed/pasted at once -- hand the whole
+    // raw string off to the parent to split, resolve, and commit as
+    // separate rows in one go, instead of treating it as one description.
+    if (item.query.includes(',')) {
+      onCommitQuickItems(item.query)
+      return
+    }
     applyNaturalLanguageParse()
     onAdvanceToTotals()
   }
@@ -439,7 +480,7 @@ function ItemEntryBlock({
           <input
             ref={descRef}
             className={inputClass + ' pl-9'}
-            placeholder="Item description"
+            placeholder='e.g. 1pc wheel barrow tire, 2 bags cement'
             value={item.query}
             autoComplete="off"
             autoCorrect="off"
@@ -512,176 +553,6 @@ function ItemEntryBlock({
   )
 }
 
-// One customer's inline "Bulk Book View" ticket: a stack of Quantity +
-// Item Description rows (no per-row price), a '+' to append another row
-// below, and the ticket's own LRD/USD total sitting flush beneath the
-// lowest row. Enter always drives focus forward -- qty -> description ->
-// (next row's qty, or the totals once the last row is reached) -- and never
-// creates a row itself; only the '+' button does that.
-function BulkTicketCard({
-  ticket,
-  ticketIndex,
-  canRemove,
-  onUpdateRow,
-  onAddRow,
-  onRemoveRow,
-  onUpdateTotals,
-  onRemoveTicket,
-  onSubmitTicket,
-}: {
-  ticket: BulkTicket
-  ticketIndex: number
-  canRemove: boolean
-  onUpdateRow: (rowKey: string, patch: Partial<ItemBlock>) => void
-  onAddRow: () => void
-  onRemoveRow: (rowKey: string) => void
-  onUpdateTotals: (patch: Partial<Pick<BulkTicket, 'totalLrd' | 'totalUsd'>>) => void
-  onRemoveTicket: () => void
-  onSubmitTicket: () => void
-}) {
-  const qtyRefs = useRef(new Map<string, HTMLInputElement>())
-  const totalLrdRef = useRef<HTMLInputElement>(null)
-  const totalUsdRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (ticket.lastAddedRowKey) qtyRefs.current.get(ticket.lastAddedRowKey)?.focus()
-  }, [ticket.lastAddedRowKey])
-
-  const descRefs = useRef(new Map<string, HTMLInputElement>())
-
-  function onQtyEnter(e: KeyboardEvent, rowKey: string) {
-    if (e.key !== 'Enter') return
-    e.preventDefault()
-    descRefs.current.get(rowKey)?.focus()
-  }
-
-  function onDescriptionEnter(e: KeyboardEvent, rowIndex: number) {
-    if (e.key !== 'Enter') return
-    e.preventDefault()
-    if (rowIndex === ticket.rows.length - 1) {
-      totalLrdRef.current?.focus()
-    } else {
-      qtyRefs.current.get(ticket.rows[rowIndex + 1].key)?.focus()
-    }
-  }
-
-  return (
-    <div className="rounded-xl border border-[var(--border)] p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Customer Ticket {ticketIndex + 1}</span>
-        {canRemove && (
-          <button onClick={onRemoveTicket} aria-label="Remove ticket" className="text-[var(--text-muted)] hover:text-[var(--status-critical)]">
-            <TrashIcon className="h-4 w-4" />
-          </button>
-        )}
-      </div>
-
-      <div className="flex flex-col gap-2">
-        {ticket.rows.map((row, i) => (
-          <div key={row.key} className="flex items-center gap-2">
-            <input
-              ref={(el) => {
-                if (el) qtyRefs.current.set(row.key, el)
-                else qtyRefs.current.delete(row.key)
-              }}
-              type="number"
-              inputMode="numeric"
-              min={1}
-              className="tabular w-14 shrink-0 rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-2 py-2 text-center text-sm font-semibold outline-none focus:border-[var(--series-1)]"
-              value={row.qty}
-              onFocus={selectOnFocus}
-              onChange={(e) => onUpdateRow(row.key, { qty: Number(e.target.value) || 1 })}
-              onKeyDown={(e) => onQtyEnter(e, row.key)}
-            />
-            <input
-              ref={(el) => {
-                if (el) descRefs.current.set(row.key, el)
-                else descRefs.current.delete(row.key)
-              }}
-              className={inputClass + ' flex-1'}
-              placeholder="Item description"
-              value={row.query}
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              onChange={(e) => onUpdateRow(row.key, { query: e.target.value })}
-              onKeyDown={(e) => onDescriptionEnter(e, i)}
-            />
-            {i === ticket.rows.length - 1 ? (
-              <button
-                type="button"
-                onClick={onAddRow}
-                aria-label="Add row"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--series-1)] text-white"
-              >
-                <PlusIcon className="h-4 w-4" />
-              </button>
-            ) : (
-              ticket.rows.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => onRemoveRow(row.key)}
-                  aria-label="Remove row"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center text-[var(--text-muted)] hover:text-[var(--status-critical)]"
-                >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
-              )
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Sits flush beneath the lowest row and shifts down with it
-          naturally as rows are appended -- LRD first, per the shop's own
-          ledger convention. */}
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <Field label="Total LRD">
-          <input
-            ref={totalLrdRef}
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="0.01"
-            className={inputClass}
-            placeholder="0.00"
-            value={ticket.totalLrd}
-            onFocus={selectOnFocus}
-            onChange={(e) => onUpdateTotals({ totalLrd: e.target.value })}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                totalUsdRef.current?.focus()
-              }
-            }}
-          />
-        </Field>
-        <Field label="Total USD">
-          <input
-            ref={totalUsdRef}
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="0.01"
-            className={inputClass}
-            placeholder="0.00"
-            value={ticket.totalUsd}
-            onFocus={selectOnFocus}
-            onChange={(e) => onUpdateTotals({ totalUsd: e.target.value })}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                onSubmitTicket()
-              }
-            }}
-          />
-        </Field>
-      </div>
-    </div>
-  )
-}
-
 export function RecordSaleSheet({
   open,
   onClose,
@@ -701,13 +572,11 @@ export function RecordSaleSheet({
   const savedQualifiers = useMemo(() => (savedQualifierRows ?? []).map((r) => r.label), [savedQualifierRows])
   const abbreviationRules = useLiveQuery(() => (open ? db.abbreviations.toArray() : []), [open]) ?? []
 
-  const [viewMode, setViewMode] = useState<'single' | 'bulk'>('single')
   const [items, setItems] = useState<ItemBlock[]>([blankItem()])
   const [location, setLocation] = useState<FulfillmentLocation>('myShop')
   const [totalLrd, setTotalLrd] = useState('')
   const [totalUsd, setTotalUsd] = useState('')
   const [lastAddedKey, setLastAddedKey] = useState<string | null>(null)
-  const [bulkTickets, setBulkTickets] = useState<BulkTicket[]>([blankBulkTicket()])
   const [sameAsLast, setSameAsLast] = useState(false)
   const [tbs, setTbs] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -725,27 +594,19 @@ export function RecordSaleSheet({
       const recovered = loadDraftFromStorage()
       if (recovered && draftHasContent(recovered)) {
         const restoredItems = recovered.items.length > 0 ? recovered.items.map(fromPersistedItem) : [blankItem()]
-        setViewMode(recovered.viewMode)
         setItems(restoredItems)
         setLocation(recovered.location)
         setTotalLrd(recovered.totalLrd)
         setTotalUsd(recovered.totalUsd)
         setLastAddedKey(null)
         setTbs(recovered.tbs)
-        setBulkTickets(
-          recovered.bulkTickets.length > 0
-            ? recovered.bulkTickets.map((t) => ({ ...t, rows: t.rows.map(fromPersistedItem), lastAddedRowKey: null }))
-            : [blankBulkTicket()],
-        )
       } else {
         const first = blankItem()
-        setViewMode('single')
         setItems([first])
         setLocation('myShop')
         setTotalLrd('')
         setTotalUsd('')
         setLastAddedKey(first.key)
-        setBulkTickets([blankBulkTicket()])
         setTbs(false)
       }
       setSameAsLast(false)
@@ -762,22 +623,20 @@ export function RecordSaleSheet({
   useEffect(() => {
     if (!open) return
     saveDraftToStorage({
-      viewMode,
       items: items.map(toPersistedItem),
-      bulkTickets: bulkTickets.map((t) => ({ key: t.key, totalLrd: t.totalLrd, totalUsd: t.totalUsd, rows: t.rows.map(toPersistedItem) })),
       location,
       totalLrd,
       totalUsd,
       tbs,
     })
-  }, [open, viewMode, items, bulkTickets, location, totalLrd, totalUsd, tbs])
+  }, [open, items, location, totalLrd, totalUsd, tbs])
 
   // The only way to leave this form is the explicit "X" button (the backdrop
   // is locked) -- and even then, an in-progress ticket triggers a
   // confirmation before anything is discarded, so an accidental tap can
   // never silently wipe typed-in data.
   function requestClose() {
-    const hasContent = draftHasContent({ items: items.map(toPersistedItem), bulkTickets: bulkTickets.map((t) => ({ ...t, rows: t.rows.map(toPersistedItem) })) })
+    const hasContent = draftHasContent({ items: items.map(toPersistedItem) })
     if (hasContent && !window.confirm('Discard this in-progress sale? Anything typed will be lost.')) return
     clearDraftFromStorage()
     onClose()
@@ -858,38 +717,53 @@ export function RecordSaleSheet({
     setItems((prev) => (prev.length > 1 ? prev.filter((it) => it.key !== key) : prev))
   }
 
-  function updateBulkRow(ticketKey: string, rowKey: string, patch: Partial<ItemBlock>) {
-    setBulkTickets((prev) =>
-      prev.map((t) => (t.key === ticketKey ? { ...t, rows: t.rows.map((r) => (r.key === rowKey ? { ...r, ...patch } : r)) } : t)),
-    )
+  // Pulls an already-committed row (from the comma-batch quick-entry path,
+  // possibly still unconfirmed) back out to be the active, editable row --
+  // dropping the current active row first if it was never actually touched,
+  // so reopening never leaves a stray empty row buried in the middle of the
+  // list.
+  function reopenItem(key: string) {
+    setItems((prev) => {
+      const idx = prev.findIndex((it) => it.key === key)
+      if (idx === -1) return prev
+      const target = { ...prev[idx], matchStatus: undefined }
+      const others = prev.filter((it, i) => i !== idx && (it.query.trim() || it.selectedProduct))
+      return [...others, target]
+    })
   }
 
-  function addBulkRow(ticketKey: string) {
-    setBulkTickets((prev) =>
-      prev.map((t) => {
-        if (t.key !== ticketKey) return t
-        const fresh = blankItem()
-        return { ...t, rows: [...t.rows, fresh], lastAddedRowKey: fresh.key }
-      }),
-    )
-  }
-
-  function removeBulkRow(ticketKey: string, rowKey: string) {
-    setBulkTickets((prev) =>
-      prev.map((t) => (t.key === ticketKey ? { ...t, rows: t.rows.length > 1 ? t.rows.filter((r) => r.key !== rowKey) : t.rows } : t)),
-    )
-  }
-
-  function updateBulkTotals(ticketKey: string, patch: Partial<Pick<BulkTicket, 'totalLrd' | 'totalUsd'>>) {
-    setBulkTickets((prev) => prev.map((t) => (t.key === ticketKey ? { ...t, ...patch } : t)))
-  }
-
-  function addBulkTicket() {
-    setBulkTickets((prev) => [...prev, blankBulkTicket()])
-  }
-
-  function removeBulkTicket(ticketKey: string) {
-    setBulkTickets((prev) => (prev.length > 1 ? prev.filter((t) => t.key !== ticketKey) : prev))
+  // Splits raw quick-entry text on commas, resolves each segment (qty/unit/
+  // alias parsing + fuzzy product matching against the live catalog), and
+  // appends the results as committed rows -- this is what makes "comma
+  // means multiple items" work, whether it's one segment or ten.
+  function commitQuickItems(raw: string) {
+    const lines = splitOrderLines(raw)
+    if (lines.length === 0) return
+    const resolved = lines.map((line): ItemBlock => {
+      const parsed = parseNaturalLanguageLine(line, abbreviationRules)
+      const base = blankItem()
+      if (!parsed) return { ...base, query: line }
+      const candidates = fuzzyMatchProducts(parsed.description, products ?? [], variantsByProduct)
+      const status = confidenceOf(candidates)
+      const top = candidates[0]
+      return {
+        ...base,
+        qty: parsed.qty,
+        ...resolveUnitAbbrev(parsed.unitAbbrev, savedQualifiers),
+        unitAbbrev: parsed.unitAbbrev,
+        query: status === 'linked' && top ? top.label : parsed.description,
+        selectedProduct: status === 'linked' && top ? top.product : null,
+        selectedVariantId: status === 'linked' && top ? top.variant?.id ?? null : null,
+        sourceTag: parsed.sourceTag ?? undefined,
+        sourceNote: parsed.sourceNote ?? undefined,
+        matchStatus: status,
+      }
+    })
+    setItems((prev) => {
+      const withoutBlankActive = prev.filter((it) => it.query.trim() || it.selectedProduct)
+      return [...withoutBlankActive, ...resolved, blankItem()]
+    })
+    setLastAddedKey(null)
   }
 
   const anyPerItemAmount = items.some((it) => (Number(it.lrdAmount) || 0) > 0 || (Number(it.usdAmount) || 0) > 0)
@@ -897,14 +771,8 @@ export function RecordSaleSheet({
   const itemsGrandUsd = items.reduce((s, it) => s + (Number(it.usdAmount) || 0), 0)
   const totalLrdNum = Number(totalLrd) || 0
   const totalUsdNum = Number(totalUsd) || 0
-  const singleGrandLrd = anyPerItemAmount ? itemsGrandLrd : totalLrdNum
-  const singleGrandUsd = anyPerItemAmount ? itemsGrandUsd : totalUsdNum
-
-  const bulkGrandLrd = bulkTickets.reduce((s, t) => s + (Number(t.totalLrd) || 0), 0)
-  const bulkGrandUsd = bulkTickets.reduce((s, t) => s + (Number(t.totalUsd) || 0), 0)
-
-  const grandLrd = viewMode === 'bulk' ? bulkGrandLrd : singleGrandLrd
-  const grandUsd = viewMode === 'bulk' ? bulkGrandUsd : singleGrandUsd
+  const grandLrd = anyPerItemAmount ? itemsGrandLrd : totalLrdNum
+  const grandUsd = anyPerItemAmount ? itemsGrandUsd : totalUsdNum
   const grandTotalParts: string[] = []
   if (grandLrd > 0) grandTotalParts.push(money(grandLrd, 'LRD'))
   if (grandUsd > 0) grandTotalParts.push(money(grandUsd, 'USD'))
@@ -919,9 +787,10 @@ export function RecordSaleSheet({
   // day), matching how a fresh page of the physical ledger book starts over.
   const todayKey = dateKeyMonrovia(Date.now())
   const todayStartTs = useMemo(() => new Date(`${todayKey}T00:00:00Z`).getTime(), [todayKey])
-  const todaySales = useLiveQuery(() => (open ? db.sales.where('timestamp').aboveOrEqual(todayStartTs).toArray() : []), [open, todayStartTs])
+  const todaySalesRaw = useLiveQuery(() => (open ? db.sales.where('timestamp').aboveOrEqual(todayStartTs).toArray() : []), [open, todayStartTs])
+  const todaySales = useMemo(() => withoutVoided(todaySalesRaw ?? []), [todaySalesRaw])
   const dailyIndexByCustomerNumber = useMemo(() => {
-    const chronological = [...(todaySales ?? [])].sort((a, b) => a.timestamp - b.timestamp)
+    const chronological = [...todaySales].sort((a, b) => a.timestamp - b.timestamp)
     const map = new Map<number, number>()
     let idx = 0
     for (const s of chronological) {
@@ -929,7 +798,10 @@ export function RecordSaleSheet({
     }
     return map
   }, [todaySales])
-  const lastSale = useLiveQuery(() => (open ? db.sales.orderBy('timestamp').last() : undefined), [open])
+  const lastSale = useLiveQuery(
+    () => (open ? db.sales.orderBy('timestamp').reverse().filter((s) => !s.voidedAt).first() : undefined),
+    [open],
+  )
   const lastSaleIsToday = !!lastSale && dateKeyMonrovia(lastSale.timestamp) === todayKey
   const lastSaleDisplayNumber = lastSale ? (lastSaleIsToday ? dailyIndexByCustomerNumber.get(lastSale.customerNumber) ?? 1 : lastSale.customerNumber) : null
   const previewDailyNumber =
@@ -944,36 +816,20 @@ export function RecordSaleSheet({
       .filter((it) => (it.selectedProduct ? it.selectedProduct.name : it.query.trim()))
   }
 
-  function namedBulkTickets(): { ticket: BulkTicket; rows: ItemBlock[] }[] {
-    return bulkTickets
-      .map((t) => ({ ticket: t, rows: t.rows.filter((r) => (r.selectedProduct ? r.selectedProduct.name : r.query.trim())) }))
-      .filter((t) => t.rows.length > 0)
-  }
-
-  // Pressing Enter (in any item's/row's fields) submits the whole ticket
-  // straight to the Ledger Push Review Panel -- it never loops back to a
-  // new item, and Bulk Book View validates every queued customer ticket at
-  // once before opening the same review step.
+  // Pressing Enter (in any item's fields) submits the whole ticket straight
+  // to the Ledger Push Review Panel -- it never loops back to a new item.
+  // Blocked while any row is still an unconfirmed fuzzy match/new-item
+  // suggestion, since those need an explicit tap (reopen the row) before
+  // they're safe to write.
   function openReview() {
-    if (viewMode === 'bulk') {
-      const validTickets = namedBulkTickets()
-      if (validTickets.length === 0) {
-        setSaveError('Add at least one item before recording the sale.')
-        return
-      }
-      const missingTotal = validTickets.find((t) => (Number(t.ticket.totalLrd) || 0) <= 0 && (Number(t.ticket.totalUsd) || 0) <= 0)
-      if (missingTotal) {
-        setSaveError('Enter a total amount (LRD, USD, or both) for every customer ticket.')
-        return
-      }
-      setSaveError(null)
-      setReviewOpen(true)
-      return
-    }
-
     const valid = namedItems()
     if (valid.length === 0) {
       setSaveError('Add at least one item before recording the sale.')
+      return
+    }
+    const unconfirmed = valid.find((it) => it.matchStatus === 'suggested' || it.matchStatus === 'new')
+    if (unconfirmed) {
+      setSaveError(`Confirm "${unconfirmed.query}" before recording -- tap it above to review the match.`)
       return
     }
     if (!anyPerItemAmount && totalLrdNum <= 0 && totalUsdNum <= 0) {
@@ -984,7 +840,7 @@ export function RecordSaleSheet({
     setReviewOpen(true)
   }
 
-  const singleLineSummaries = useMemo<TicketLineSummary[]>(() => {
+  const lineSummaries = useMemo<TicketLineSummary[]>(() => {
     return namedItems().map((it) => {
       const name = it.selectedProduct ? it.selectedProduct.name : it.query.trim()
       const lrd = anyPerItemAmount ? Number(it.lrdAmount) || 0 : 0
@@ -1000,20 +856,6 @@ export function RecordSaleSheet({
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, anyPerItemAmount])
-
-  const bulkLineSummaries = useMemo<TicketLineSummary[]>(() => {
-    const list: TicketLineSummary[] = []
-    namedBulkTickets().forEach(({ rows }, ti) => {
-      rows.forEach((r) => {
-        const name = r.selectedProduct ? r.selectedProduct.name : r.query.trim()
-        list.push({ key: r.key, label: `Ticket ${ti + 1} · ${r.qty} ${unitLabel(r)} · ${name}`, amounts: '—' })
-      })
-    })
-    return list
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bulkTickets])
-
-  const lineSummaries = viewMode === 'bulk' ? bulkLineSummaries : singleLineSummaries
 
   // A "Master Product" is one that's already been organized (grouped via
   // Group…/Link to Master Product in Inventory) -- i.e. it carries more
@@ -1248,44 +1090,6 @@ export function RecordSaleSheet({
   async function submit() {
     setSaveError(null)
 
-    if (viewMode === 'bulk') {
-      const validTickets = namedBulkTickets()
-      if (validTickets.length === 0) {
-        setSaveError('Add at least one item before recording the sale.')
-        return
-      }
-
-      setSaving(true)
-      try {
-        await db.transaction('rw', db.sales, db.products, db.variants, db.settings, async () => {
-          // Each stacked ticket is its own customer/order (never "same as
-          // last" -- Bulk Book View is specifically for several distinct
-          // customers in one sitting), with distinct timestamps so daily
-          // ordering/indexing stays correct.
-          for (let i = 0; i < validTickets.length; i++) {
-            const { ticket, rows } = validTickets[i]
-            const customerNumber = await reserveNextCustomerNumber()
-            const orderNumber = await reserveNextOrderNumber()
-            const timestamp = Date.now() + i
-            await writeTicketLines(rows, true, Number(ticket.totalLrd) || 0, Number(ticket.totalUsd) || 0, customerNumber, orderNumber, location, timestamp)
-          }
-        })
-      } catch (err) {
-        console.error('Failed to record sale', err)
-        setSaving(false)
-        onError(err instanceof Error ? `Could not save this sale: ${err.message}` : 'Could not save this sale. Please try again.')
-        return
-      }
-
-      const totalRows = validTickets.reduce((s, t) => s + t.rows.length, 0)
-      setSaving(false)
-      setReviewOpen(false)
-      clearDraftFromStorage()
-      onSaved(`Recorded ${validTickets.length} customer ticket${validTickets.length === 1 ? '' : 's'} — ${totalRows} item${totalRows === 1 ? '' : 's'} — ${grandTotal}`)
-      onClose()
-      return
-    }
-
     const valid = namedItems()
     if (valid.length === 0) {
       setSaveError('Add at least one item before recording the sale.')
@@ -1326,139 +1130,90 @@ export function RecordSaleSheet({
         </button>
       </div>
 
-      <div className="mb-3 grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={() => setViewMode('single')}
-          className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
-            viewMode === 'single' ? 'bg-[var(--series-1)] text-white' : 'bg-[var(--page-plane)] text-[var(--text-secondary)]'
-          }`}
-        >
-          Single Entry
-        </button>
-        <button
-          type="button"
-          onClick={() => setViewMode('bulk')}
-          className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
-            viewMode === 'bulk' ? 'bg-[var(--series-1)] text-white' : 'bg-[var(--page-plane)] text-[var(--text-secondary)]'
-          }`}
-        >
-          Bulk Book View
-        </button>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          {lastSale && (
+            <label className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+              <input type="checkbox" checked={sameAsLast} onChange={(e) => setSameAsLast(e.target.checked)} />
+              Same as #{lastSaleDisplayNumber}
+            </label>
+          )}
+        </div>
+        <Badge tone="good">#{previewDailyNumber}</Badge>
       </div>
 
-      {viewMode === 'single' ? (
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            {lastSale && (
-              <label className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
-                <input type="checkbox" checked={sameAsLast} onChange={(e) => setSameAsLast(e.target.checked)} />
-                Same as #{lastSaleDisplayNumber}
-              </label>
-            )}
-          </div>
-          <Badge tone="good">#{previewDailyNumber}</Badge>
-        </div>
-      ) : (
-        <div className="mb-3 text-xs font-semibold text-[var(--text-muted)]">
-          {bulkTickets.length} customer ticket{bulkTickets.length === 1 ? '' : 's'} queued
-        </div>
-      )}
-
-      {viewMode === 'single' ? (
-        <>
-          {/* Every item but the active (last) one is committed -- shown as a
-              compact one-line summary pinned above, purely for visual
-              reference, per the '+' commit behavior below. */}
-          {items.length > 1 && (
-            <div className="mb-3 flex max-h-40 flex-col gap-1.5 overflow-y-auto">
-              {items.slice(0, -1).map((it) => (
-                <CommittedItemRow key={it.key} item={it} onRemove={() => removeItem(it.key)} />
-              ))}
-            </div>
-          )}
-
-          <ItemEntryBlock
-            key={items[items.length - 1].key}
-            item={items[items.length - 1]}
-            autoFocus={items[items.length - 1].key === lastAddedKey}
-            products={products ?? []}
-            variantsByProduct={variantsByProduct}
-            productStock={productStock}
-            savedQualifiers={savedQualifiers}
-            abbreviationRules={abbreviationRules}
-            onUpdate={(patch) => updateItem(items[items.length - 1].key, patch)}
-            onAddItem={addItem}
-            onAdvanceToTotals={() => totalLrdRef.current?.focus()}
-          />
-
-          {/* Single Total Capture: one whole-ticket total, LRD first then USD
-              -- submission blocks only when BOTH are left at zero. */}
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <Field label="Total LRD">
-              <input
-                ref={totalLrdRef}
-                type="number"
-                inputMode="decimal"
-                min={0}
-                step="0.01"
-                className={inputClass + ' text-lg font-semibold'}
-                placeholder="0.00"
-                value={totalLrd}
-                onFocus={selectOnFocus}
-                onChange={(e) => setTotalLrd(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    totalUsdRef.current?.focus()
-                  }
-                }}
-              />
-            </Field>
-            <Field label="Total USD">
-              <input
-                ref={totalUsdRef}
-                type="number"
-                inputMode="decimal"
-                min={0}
-                step="0.01"
-                className={inputClass + ' text-lg font-semibold'}
-                placeholder="0.00"
-                value={totalUsd}
-                onFocus={selectOnFocus}
-                onChange={(e) => setTotalUsd(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    openReview()
-                  }
-                }}
-              />
-            </Field>
-          </div>
-        </>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {bulkTickets.map((t, ti) => (
-            <BulkTicketCard
-              key={t.key}
-              ticket={t}
-              ticketIndex={ti}
-              canRemove={bulkTickets.length > 1}
-              onUpdateRow={(rowKey, patch) => updateBulkRow(t.key, rowKey, patch)}
-              onAddRow={() => addBulkRow(t.key)}
-              onRemoveRow={(rowKey) => removeBulkRow(t.key, rowKey)}
-              onUpdateTotals={(patch) => updateBulkTotals(t.key, patch)}
-              onRemoveTicket={() => removeBulkTicket(t.key)}
-              onSubmitTicket={openReview}
-            />
+      {/* Every item but the active (last) one is committed -- shown as a
+          compact one-line summary pinned above. Items typed/pasted through
+          the comma-batch path that the fuzzy matcher couldn't confidently
+          resolve are flagged amber and tappable to reopen for confirmation
+          (see CommittedItemRow). */}
+      {items.length > 1 && (
+        <div className="mb-3 flex max-h-40 flex-col gap-1.5 overflow-y-auto">
+          {items.slice(0, -1).map((it) => (
+            <CommittedItemRow key={it.key} item={it} onReopen={() => reopenItem(it.key)} onRemove={() => removeItem(it.key)} />
           ))}
-          <Button onClick={addBulkTicket} variant="secondary" className="w-full justify-center">
-            <PlusIcon className="h-4 w-4" />
-            Add Next Customer Ticket Below
-          </Button>
         </div>
       )}
+
+      <ItemEntryBlock
+        key={items[items.length - 1].key}
+        item={items[items.length - 1]}
+        autoFocus={items[items.length - 1].key === lastAddedKey}
+        products={products ?? []}
+        variantsByProduct={variantsByProduct}
+        productStock={productStock}
+        savedQualifiers={savedQualifiers}
+        abbreviationRules={abbreviationRules}
+        onUpdate={(patch) => updateItem(items[items.length - 1].key, patch)}
+        onAddItem={addItem}
+        onCommitQuickItems={commitQuickItems}
+        onAdvanceToTotals={() => totalLrdRef.current?.focus()}
+      />
+
+      {/* Single Total Capture: one whole-ticket total, LRD first then USD
+          -- submission blocks only when BOTH are left at zero. */}
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <Field label="Total LRD">
+          <input
+            ref={totalLrdRef}
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="0.01"
+            className={inputClass + ' text-lg font-semibold'}
+            placeholder="0.00"
+            value={totalLrd}
+            onFocus={selectOnFocus}
+            onChange={(e) => setTotalLrd(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                totalUsdRef.current?.focus()
+              }
+            }}
+          />
+        </Field>
+        <Field label="Total USD">
+          <input
+            ref={totalUsdRef}
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="0.01"
+            className={inputClass + ' text-lg font-semibold'}
+            placeholder="0.00"
+            value={totalUsd}
+            onFocus={selectOnFocus}
+            onChange={(e) => setTotalUsd(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                openReview()
+              }
+            }}
+          />
+        </Field>
+      </div>
 
       <div className="mt-3">
         <Field label="Fulfill from">

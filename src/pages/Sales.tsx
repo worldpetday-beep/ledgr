@@ -2,17 +2,44 @@ import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, profitOf, type Sale } from '../db'
 import { ShopifyShell, ShopifyHeaderIconButton, shopifyInputClass, shopifyChipClass, shopifyCardClass } from '../components/ShopifyShell'
-import { PlusIcon, EditIcon, SearchIcon, MoreVerticalIcon, BoxesIcon, BookIcon } from '../components/icons'
+import { PlusIcon, EditIcon, SearchIcon, MoreVerticalIcon, BoxesIcon, ScanIcon } from '../components/icons'
 import { DaybookRow } from '../components/DaybookRow'
-import { BookTabView } from '../components/BookTab'
+import { LedgerScanView } from '../components/LedgerScan'
 import { WarehouseLedgerView } from '../components/WarehouseLedger'
 import { InvoicePopup } from '../components/InvoicePopup'
 import { BottomSheet, Field } from '../components/ui'
 import { useAppActions } from '../context/AppActions'
-import { money, dateKeyMonrovia, formatDateMonrovia, formatTimeMonrovia, selectOnFocus } from '../lib/format'
-import { lrdAmountOf, usdAmountOf, customerLabelOf, deleteSaleLine, markSalePickedUp } from '../lib/salesLedger'
+import { money, dateKeyMonrovia, formatDateMonrovia, formatShortDateMonrovia, formatTimeMonrovia, selectOnFocus } from '../lib/format'
+import { lrdAmountOf, usdAmountOf, customerLabelOf, deleteSaleLine, markSalePickedUp, withoutVoided } from '../lib/salesLedger'
 
 type FilterTab = 'all' | 'tbs'
+
+type DateFilter = 'today' | 'yesterday' | 'last3' | 'last7' | 'last30' | 'all'
+
+const DATE_FILTER_OPTIONS: { value: DateFilter; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'last3', label: 'Last 3 days' },
+  { value: 'last7', label: 'Last 7 days' },
+  { value: 'last30', label: 'Last 30 days' },
+  { value: 'all', label: 'All time' },
+]
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+// The Book Tab used to be a separate "archive" screen for past days --
+// folded directly into the Orders tab instead (Shopify-orders-page style):
+// one list, a date-range dropdown instead of a hard "today only" cutoff,
+// and every order (today or years back) opens through the same edit sheet.
+function allowedDateKeysFor(filter: DateFilter): Set<string> | null {
+  if (filter === 'all') return null
+  if (filter === 'today') return new Set([dateKeyMonrovia(Date.now())])
+  if (filter === 'yesterday') return new Set([dateKeyMonrovia(Date.now() - DAY_MS)])
+  const spanDays = filter === 'last3' ? 3 : filter === 'last7' ? 7 : 30
+  const set = new Set<string>()
+  for (let i = 0; i < spanDays; i++) set.add(dateKeyMonrovia(Date.now() - i * DAY_MS))
+  return set
+}
 
 interface OrderGroup {
   orderNumber: number
@@ -39,18 +66,27 @@ export default function Sales() {
   const [editingOrderNumber, setEditingOrderNumber] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
-  const [bookTabOpen, setBookTabOpen] = useState(false)
+  const [scanOpen, setScanOpen] = useState(false)
   const [warehouseLedgerOpen, setWarehouseLedgerOpen] = useState(false)
+  const [dateFilter, setDateFilter] = useState<DateFilter>('today')
 
   const todayKey = dateKeyMonrovia(Date.now())
-  const allSales = useLiveQuery(() => db.sales.orderBy('timestamp').reverse().toArray(), [])
-  const todaySales = useMemo(() => (allSales ?? []).filter((s) => dateKeyMonrovia(s.timestamp) === todayKey), [allSales, todayKey])
+  const allSalesRaw = useLiveQuery(() => db.sales.orderBy('timestamp').reverse().toArray(), [])
+  const allSales = useMemo(() => withoutVoided(allSalesRaw ?? []), [allSalesRaw])
+  // The end-of-day balance panel always reflects literal "today", independent
+  // of whatever date range is currently selected for browsing/searching
+  // orders above it.
+  const todaySales = useMemo(() => allSales.filter((s) => dateKeyMonrovia(s.timestamp) === todayKey), [allSales, todayKey])
 
-  // Single-day isolated view — no infinite historical scroll here; past
-  // days live in the Book Tab archive instead.
+  const allowedDateKeys = useMemo(() => allowedDateKeysFor(dateFilter), [dateFilter])
+  const rangeSales = useMemo(
+    () => (allowedDateKeys ? allSales.filter((s) => allowedDateKeys.has(dateKeyMonrovia(s.timestamp))) : allSales),
+    [allSales, allowedDateKeys],
+  )
+
   const orders = useMemo(() => {
     const map = new Map<number, Sale[]>()
-    for (const s of todaySales) {
+    for (const s of rangeSales) {
       const list = map.get(s.orderNumber) ?? []
       list.push(s)
       map.set(s.orderNumber, list)
@@ -65,7 +101,7 @@ export default function Sales() {
     }))
     groups.sort((a, b) => b.timestamp - a.timestamp)
     return groups
-  }, [todaySales])
+  }, [rangeSales])
 
   const filteredOrders = useMemo(() => {
     let list = orders
@@ -177,21 +213,37 @@ export default function Sales() {
           <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             className={shopifyInputClass + ' pl-9'}
-            placeholder="Search today's orders, items, or customers"
+            placeholder="Search orders, items, or customers"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
 
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          {(['all', 'tbs'] as FilterTab[]).map((tab) => (
-            <button key={tab} onClick={() => setFilterTab(tab)} className={shopifyChipClass(filterTab === tab)}>
-              {tab === 'all' ? 'All' : 'TBS'}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            {(['all', 'tbs'] as FilterTab[]).map((tab) => (
+              <button key={tab} onClick={() => setFilterTab(tab)} className={shopifyChipClass(filterTab === tab)}>
+                {tab === 'all' ? 'All' : 'TBS'}
+              </button>
+            ))}
+          </div>
+          <select
+            className={shopifyInputClass + ' ml-auto w-auto shrink-0 py-1.5 pr-7 text-xs font-semibold'}
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value as DateFilter)}
+            aria-label="Date range"
+          >
+            {DATE_FILTER_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
         </div>
 
-        <div className="px-1 text-xs font-semibold text-slate-500">{formatDateMonrovia(Date.now())} — today's ledger</div>
+        <div className="px-1 text-xs font-semibold text-slate-500">
+          {dateFilter === 'today' ? `${formatDateMonrovia(Date.now())} — today's ledger` : DATE_FILTER_OPTIONS.find((o) => o.value === dateFilter)?.label}
+        </div>
 
         <div className="flex flex-col gap-3">
           {filteredOrders.map((order) => {
@@ -224,7 +276,10 @@ export default function Sales() {
                       </>
                     )}
                   </div>
-                  <div className="shrink-0 text-xs text-slate-400">{formatTimeMonrovia(order.timestamp)}</div>
+                  <div className="shrink-0 text-xs text-slate-400">
+                    {dateKeyMonrovia(order.timestamp) !== todayKey && `${formatShortDateMonrovia(order.timestamp)} · `}
+                    {formatTimeMonrovia(order.timestamp)}
+                  </div>
                 </div>
 
                 <div className="mt-1 flex flex-wrap gap-1.5">
@@ -358,12 +413,12 @@ export default function Sales() {
           <button
             onClick={() => {
               setMoreMenuOpen(false)
-              setBookTabOpen(true)
+              setScanOpen(true)
             }}
             className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-slate-900 hover:bg-slate-50"
           >
-            <BookIcon className="h-5 w-5 text-slate-500" />
-            Book Tab — daily archive
+            <ScanIcon className="h-5 w-5 text-slate-500" />
+            Upload Ledger Image
           </button>
           <button
             onClick={() => {
@@ -378,7 +433,7 @@ export default function Sales() {
         </div>
       </BottomSheet>
 
-      {bookTabOpen && <BookTabView onClose={() => setBookTabOpen(false)} />}
+      {scanOpen && <LedgerScanView onClose={() => setScanOpen(false)} />}
       {warehouseLedgerOpen && <WarehouseLedgerView onClose={() => setWarehouseLedgerOpen(false)} />}
       <InvoicePopup
         order={invoiceOrder}
