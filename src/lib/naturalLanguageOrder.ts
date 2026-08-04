@@ -163,3 +163,40 @@ export function confidenceOf(candidates: ProductMatchCandidate[]): MatchConfiden
   if (top.score >= SUGGEST_THRESHOLD) return 'suggested'
   return 'new'
 }
+
+// A bare number, optionally with a size/weight unit glued on -- "10",
+// '10"', "2ft", "15kg". Deliberately the same shape as itemMatch.ts's
+// SIZE_TOKEN_RE (kept as a separate copy since these are two different
+// modules with two different jobs).
+const SIZE_TOKEN_RE = /^\d+(\.\d+)?(in|ft|cm|mm|g|kg|lb|oz)?$/
+
+function stripSizeTokens(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/"/g, ' in ')
+    .split(/\s+/)
+    .filter((w) => w && !SIZE_TOKEN_RE.test(w))
+    .join(' ')
+    .trim()
+}
+
+// Finds an existing product that's almost certainly the SAME underlying
+// item in a different size -- e.g. `10" double elegance mattress` and
+// `double 15" elegance mattress` both reduce to "double elegance mattress"
+// once their size numbers are stripped. Deliberately only used for
+// CREATING a new variant under an existing family (AddProductFastEntryModal,
+// and writeTicketLines' unverified-free-text fallback) -- never for
+// resolving which EXISTING variant a sale should deduct stock from, since
+// silently treating a 2" item as interchangeable with a 4" item there would
+// deduct the wrong physical stock.
+export function findFamilyMatch(description: string, products: Product[]): Product | null {
+  const typed = stripSizeTokens(description)
+  if (typed.length < 3) return null
+  for (const p of products) {
+    if (p.archived) continue
+    const candidate = stripSizeTokens(p.name)
+    if (!candidate) continue
+    if (typed === candidate || typed.includes(candidate) || candidate.includes(typed)) return p
+  }
+  return null
+}

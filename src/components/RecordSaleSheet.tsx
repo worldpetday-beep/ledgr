@@ -13,9 +13,9 @@ import {
   type AbbreviationRule,
 } from '../db'
 import { BottomSheet, Button, Field, inputClass, Badge, Pill, Switch } from './ui'
-import { LedgerPushReviewPanel, type TicketLineSummary } from './LedgerPushReviewPanel'
+import { LedgerPushReviewPanel, RecentSalesReference, type TicketLineSummary } from './LedgerPushReviewPanel'
 import { SearchIcon, PlusIcon, TrashIcon, XIcon } from './icons'
-import { money, selectOnFocus, dateKeyMonrovia } from '../lib/format'
+import { money, selectOnFocus, dateKeyMonrovia, variantDisplayLabel } from '../lib/format'
 import { itemSearchMatches } from '../lib/itemMatch'
 import { withoutVoided } from '../lib/salesLedger'
 import {
@@ -23,6 +23,7 @@ import {
   splitOrderLines,
   fuzzyMatchProducts,
   confidenceOf,
+  findFamilyMatch,
   type MatchConfidence,
   type ProductMatchCandidate,
 } from '../lib/naturalLanguageOrder'
@@ -333,6 +334,11 @@ function ItemEntryBlock({
     return results.slice(0, 8)
   }, [products, variantsByProduct, productStock, item.query])
 
+  // Powers the "+ Create New" pin's label -- lets it say exactly which
+  // existing family a brand-new size/color would land under, instead of a
+  // generic "create new" with no context.
+  const familyMatchForQuery = useMemo(() => findFamilyMatch(item.query, products), [item.query, products])
+
   function pickSuggestion(s: ItemSuggestion) {
     onUpdate({ selectedProduct: s.product, selectedVariantId: s.variant?.id ?? null, query: s.variantLabel, matchStatus: 'linked' })
   }
@@ -341,10 +347,45 @@ function ItemEntryBlock({
   // initialize the product+variant in the catalog right away (rather than
   // waiting for checkout to do it), then selects it so the ticket proceeds
   // exactly like picking any other existing match.
+  // A brand-new size/color of an existing product family (e.g. typing a
+  // new mattress size) becomes a new VARIANT under that family instead of
+  // yet another standalone product -- this is the actual fix for products
+  // silently multiplying into near-duplicates every time a slightly
+  // different size gets typed at checkout. Only ever used for creating a
+  // new item, never for picking which existing variant a sale deducts
+  // stock from (see findFamilyMatch's own comment for why that matters).
   async function pickCreateNew() {
     const name = item.query.trim()
     if (!name) return
     const now = Date.now()
+
+    const family = findFamilyMatch(name, products)
+    if (family) {
+      const siblings = variantsByProduct.get(family.id!) ?? []
+      if (siblings.length === 1 && siblings[0].label === 'Standard') {
+        await db.variants.update(siblings[0].id!, { label: family.name, updatedAt: now })
+      }
+      const variantId = (await db.variants.add({
+        productId: family.id!,
+        label: name,
+        optionValues: [],
+        costPrice: 0,
+        costUnknown: true,
+        sellPrice: 0,
+        currency: 'USD',
+        stockMyShop: 0,
+        stockVishalShop: 0,
+        lowStockThreshold: 3,
+        order: siblings.length,
+        isNew: true,
+        newSince: now,
+        createdAt: now,
+        updatedAt: now,
+      })) as number
+      onUpdate({ selectedProduct: family, selectedVariantId: variantId, query: name, matchStatus: 'linked' })
+      return
+    }
+
     const productId = (await db.products.add({
       name,
       category: 'General',
@@ -423,19 +464,28 @@ function ItemEntryBlock({
       onCommitQuickItems(item.query)
       return
     }
+    // A visible suggestion list means there's already a real product on
+    // screen to pick -- Enter takes the top one (the same one a tap would),
+    // instead of re-running the free-text parser against raw typed text
+    // that a moment ago was actively matching something real.
+    if (!item.selectedProduct && itemSuggestions.length > 0) {
+      pickSuggestion(itemSuggestions[0])
+      onAdvanceToTotals()
+      return
+    }
     applyNaturalLanguageParse()
     onAdvanceToTotals()
   }
 
   return (
-    <div className="rounded-xl border border-[var(--border)] p-3">
-      <div className="flex items-center gap-1.5">
+    <div className="rounded-xl border border-[var(--border)] p-3.5">
+      <div className="flex items-center gap-2">
         <input
           ref={qtyRef}
           type="number"
           inputMode="numeric"
           min={1}
-          className="tabular w-12 shrink-0 rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-1.5 py-2 text-center text-sm font-semibold outline-none focus:border-[var(--series-1)]"
+          className="tabular w-14 shrink-0 rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-1.5 py-2.5 text-center text-base font-semibold outline-none focus:border-[var(--series-1)]"
           value={item.qty}
           onFocus={selectOnFocus}
           onChange={(e) => onUpdate({ qty: Number(e.target.value) || 1 })}
@@ -490,46 +540,48 @@ function ItemEntryBlock({
             onKeyDown={onDescriptionEnter}
             onBlur={applyNaturalLanguageParse}
           />
-          {/* Suggestions are only ever applied by an explicit tap/click below
-              -- Enter always keeps the raw typed text, never a close match.
-              No product image (assets are always null here) -- the
-              description gets the space back instead, wrapping across
-              lines rather than truncating so long dimension/gauge names
-              stay fully readable. */}
+          {/* One clean line per suggestion -- product name leads, "Standard"
+              never shows, and there's no stock/cost clutter fighting for
+              room. "+ Create New" is always pinned at the bottom, never
+              hidden just because a weak match exists, so there's always an
+              explicit way to say "no, this is genuinely new" instead of
+              being stuck picking the closest wrong thing. */}
           {item.query && !item.selectedProduct && (
             <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
               {itemSuggestions.map((s) => (
                 <button
                   key={s.key}
                   type="button"
-                  onClick={() => pickSuggestion(s)}
-                  className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-[var(--page-plane)]"
+                  onClick={() => {
+                    pickSuggestion(s)
+                    onAdvanceToTotals()
+                  }}
+                  className="flex w-full items-center px-3 py-2 text-left hover:bg-[var(--page-plane)]"
                 >
-                  <div className="w-[70%] min-w-0">
-                    <div className="whitespace-normal break-words text-sm leading-snug">{s.variantLabel}</div>
-                    {s.masterName && <div className="truncate text-xs text-[var(--text-muted)]">{s.masterName}</div>}
-                  </div>
-                  <div className="ml-auto flex shrink-0 flex-col items-end gap-1 pt-0.5">
-                    <span className="tabular whitespace-nowrap rounded-full bg-[var(--page-plane)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]">
-                      {s.stock} left
-                    </span>
-                    {s.costKnown && (
-                      <span className="tabular whitespace-nowrap rounded-full bg-[var(--page-plane)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]">
-                        {money(s.costPrice, s.variant?.currency ?? 'USD')}
-                      </span>
+                  <span className="min-w-0 flex-1 truncate text-sm">
+                    {s.masterName ? (
+                      <>
+                        {s.masterName}
+                        {variantDisplayLabel(s.masterName, s.variantLabel) !== s.masterName && (
+                          <span className="text-[var(--text-muted)]"> — {variantDisplayLabel(s.masterName, s.variantLabel)}</span>
+                        )}
+                      </>
+                    ) : (
+                      s.variantLabel
                     )}
-                  </div>
+                  </span>
                 </button>
               ))}
-              {itemSuggestions.length === 0 && (
-                <button
-                  type="button"
-                  onClick={pickCreateNew}
-                  className="flex w-full items-center px-3 py-2 text-left text-sm font-medium text-[var(--series-1)] hover:bg-[var(--page-plane)]"
-                >
-                  + Create New Variant: "{item.query.trim()}"
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  pickCreateNew()
+                  onAdvanceToTotals()
+                }}
+                className="flex w-full items-center border-t border-[var(--border)] px-3 py-2 text-left text-sm font-medium text-[var(--series-1)] hover:bg-[var(--page-plane)]"
+              >
+                {familyMatchForQuery ? `+ Add new size/variant under "${familyMatchForQuery.name}"` : `+ Create New: "${item.query.trim()}"`}
+              </button>
             </div>
           )}
         </div>
@@ -865,15 +917,7 @@ export function RecordSaleSheet({
   // lands inside the existing "Zinc" master instead of becoming its own
   // disconnected product.
   function findMasterProductMatch(typedName: string): Product | null {
-    const typed = typedName.toLowerCase()
-    for (const p of products ?? []) {
-      if (p.archived) continue
-      const variantCount = (variantsByProduct.get(p.id!) ?? []).length
-      if (variantCount <= 1) continue
-      const candidate = p.name.toLowerCase()
-      if (typed.includes(candidate) || candidate.includes(typed)) return p
-    }
-    return null
+    return findFamilyMatch(typedName, products ?? [])
   }
 
   // Writes one customer ticket's line items to the ledger: resolves/creates
@@ -1119,16 +1163,18 @@ export function RecordSaleSheet({
   }
 
   return (
-    <BottomSheet open={open} onClose={requestClose} centered lockBackdrop>
+    <BottomSheet open={open} onClose={requestClose} centered lockBackdrop contentClassName="!max-w-xl">
       {/* The backdrop is locked (an accidental tap outside never closes this
           form) -- this is the one deliberate, explicit way to leave, and it
           always confirms first when there's anything typed to lose. */}
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Record Sale</h2>
-        <button onClick={requestClose} aria-label="Close" className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-muted)] hover:bg-[var(--page-plane)]">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-base font-semibold text-[var(--text-primary)]">Record Sale</h2>
+        <button onClick={requestClose} aria-label="Close" className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-muted)] hover:bg-[var(--page-plane)]">
           <XIcon className="h-4 w-4" />
         </button>
       </div>
+
+      <RecentSalesReference />
 
       <div className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">

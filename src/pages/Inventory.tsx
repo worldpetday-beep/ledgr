@@ -12,6 +12,7 @@ import {
   BoxesIcon,
   CheckSquareIcon,
   ChevronRightIcon,
+  EditIcon,
 } from '../components/icons'
 import { ItemThumb } from '../components/ItemThumb'
 import { ProductDetailView } from '../components/ProductDetailView'
@@ -25,9 +26,9 @@ import {
   shopifyChipClass,
   shopifyIconButtonClass,
 } from '../components/ShopifyShell'
-import { isLowStock, selectOnFocus } from '../lib/format'
+import { isLowStock, selectOnFocus, variantDisplayLabel } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
-import { tokenSortKey } from '../lib/itemMatch'
+import { familySortKey } from '../lib/itemMatch'
 import { useAppActions } from '../context/AppActions'
 import { format } from 'date-fns'
 
@@ -40,6 +41,13 @@ function hasMissingCost(v: Variant): boolean {
 
 function availableOf(variants: Variant[]): number {
   return variants.reduce((s, v) => s + v.stockMyShop + v.stockVishalShop, 0)
+}
+
+// One SKU row's display text -- "Product" alone for a loose/base variant,
+// "Product — Variant" once there's a real differentiator.
+function skuRowLabel(productName: string, variantLabel: string): string {
+  const resolved = variantDisplayLabel(productName, variantLabel)
+  return resolved === productName ? productName : `${productName} — ${resolved}`
 }
 
 const NEW_BADGE_WINDOW_MS = 72 * 60 * 60 * 1000
@@ -139,27 +147,49 @@ function StockStepper({ value, onCommit }: { value: number; onCommit: (n: number
   )
 }
 
-// Inline-editable variant title -- commits on blur, same pattern as the
-// numeric cells, so a "NEW" auto-routed variant's name can be corrected
-// right where it's flagged instead of opening the full product editor.
-function EditableTitle({ value, onCommit }: { value: string; onCommit: (next: string) => void }) {
+// Read-only by default (so a stray tap while scrolling can never nudge a
+// name) -- tapping the pencil switches this one row into an editable input,
+// which commits on blur/Enter and drops back to read-only. Wraps across up
+// to two lines instead of truncating, since the whole point of this row is
+// reading the actual name.
+function EditableTitle({ value, productName, onCommit }: { value: string; productName: string; onCommit: (next: string) => void }) {
+  const [editing, setEditing] = useState(false)
   const [text, setText] = useState(value)
 
   useEffect(() => {
     setText(value)
   }, [value])
 
+  function commit() {
+    const next = text.trim()
+    if (next) onCommit(next)
+    else setText(value)
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        onFocus={selectOnFocus}
+        className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-1.5 py-1 text-sm text-gray-900 outline-none"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+      />
+    )
+  }
+
   return (
-    <input
-      className="min-w-0 flex-1 truncate rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm text-gray-700 outline-none focus:border-gray-300 focus:bg-gray-50"
-      value={text}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={() => {
-        const next = text.trim()
-        if (next) onCommit(next)
-        else setText(value)
-      }}
-    />
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className="flex min-w-0 flex-1 items-start gap-1.5 rounded-md px-1 py-0.5 text-left"
+    >
+      <span className="min-w-0 flex-1 line-clamp-2 text-sm text-gray-700">{variantDisplayLabel(productName, value)}</span>
+      <EditIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-300" />
+    </button>
   )
 }
 
@@ -263,11 +293,11 @@ function ProductHierarchyTable({
                 <button> would be invalid HTML. The checkbox is always
                 present -- selection isn't gated behind a separate "select
                 mode" toggle. */}
-            <div className="flex w-full items-center gap-2.5 bg-gray-50 px-3 py-2.5 text-left">
+            <div className="flex w-full items-start gap-2.5 bg-gray-50 px-3 py-2.5 text-left">
               <button
                 onClick={() => onToggleSelected(product.id!)}
                 aria-label={selected ? 'Deselect item' : 'Select item'}
-                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
+                className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
                   selected ? 'border-black bg-black text-white' : 'border-gray-300'
                 }`}
               >
@@ -275,17 +305,17 @@ function ProductHierarchyTable({
               </button>
               <button
                 onClick={() => onTapProduct(product.id!)}
-                className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
               >
                 <ItemThumb image={product.images[0]} size={32} className="!rounded-md !bg-gray-200 !text-gray-400" />
-                <span className="min-w-0 flex-1 truncate text-sm font-bold text-black">{product.name}</span>
+                <span className="min-w-0 flex-1 line-clamp-2 text-sm font-bold leading-snug text-black">{product.name}</span>
               </button>
               {isAccordion && (
                 <button
                   type="button"
                   aria-label={expanded ? 'Collapse variants' : 'Expand variants'}
                   onClick={() => toggleExpanded(product.id!)}
-                  className="shrink-0 rounded-full p-1 text-gray-400 hover:bg-gray-100"
+                  className="mt-0.5 shrink-0 rounded-full p-1 text-gray-400 hover:bg-gray-100"
                 >
                   <ChevronRightIcon className={`h-4 w-4 transition-transform ${expanded ? 'rotate-90' : ''}`} />
                 </button>
@@ -293,18 +323,23 @@ function ProductHierarchyTable({
             </div>
 
             {/* Child rows -- indented beneath the parent behind a light
-                vertical guide line, product identity pinned left (editable
-                title), Cost Price / Stock Left scrollable on the right. */}
+                vertical guide line. Name gets its own full-width line (so a
+                long/combo label never has to fight the numeric cells for
+                room); Cost Price / Stock Left sit on their own line below,
+                horizontally scrollable so more tracking columns can be
+                added later without redesigning the row. */}
             {expanded && variants.map((v) => (
-              <div key={v.id} className="flex items-center gap-2 border-t border-gray-50 py-2 pl-3 pr-3">
-                <span className="h-8 w-3 shrink-0 border-l-2 border-gray-200" />
-                {isRecentlyNew(v) && (
-                  <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700">
-                    New
-                  </span>
-                )}
-                <EditableTitle value={v.label} onCommit={(next) => commitTitle(v, next)} />
-                <div className="flex shrink-0 items-center gap-2 overflow-x-auto">
+              <div key={v.id} className="flex flex-col gap-1.5 border-t border-gray-50 py-2 pl-3 pr-3">
+                <div className="flex items-start gap-2">
+                  <span className="mt-1 h-4 w-3 shrink-0 self-stretch border-l-2 border-gray-200" />
+                  <EditableTitle value={v.label} productName={product.name} onCommit={(next) => commitTitle(v, next)} />
+                  {isRecentlyNew(v) && (
+                    <span className="mt-0.5 shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700">
+                      New
+                    </span>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-2 overflow-x-auto pl-5">
                   <EditableCell label="Cost Price" value={v.costPrice} onCommit={(n) => commitCostPrice(v, n)} />
                   <StockStepper value={v.stockMyShop} onCommit={(n) => commitStock(v, n)} />
                 </div>
@@ -327,6 +362,7 @@ export default function Inventory() {
   const [query, setQuery] = useState('')
   const [activeChip, setActiveChip] = useState<Chip>('all')
   const [sortBy, setSortBy] = useState<SortBy>('name')
+  const [viewMode, setViewMode] = useState<'products' | 'sku'>('products')
 
   const [sortSheetOpen, setSortSheetOpen] = useState(false)
   const [filterSheetOpen, setFilterSheetOpen] = useState(false)
@@ -385,17 +421,21 @@ export default function Inventory() {
     return map
   }, [allVariants])
 
-  // Duplicate Syntax Inversion Resolver: flags products whose names are the
-  // same words in a different order (e.g. "4 inch nail" / "nail 4 inch") so
-  // they can be reviewed and merged. Detection is purely a read-only scan of
-  // the catalog -- the actual merge reuses mergeSelectedIntoGroup(), which
-  // only reparents variants (keeping their IDs, so past Sale rows stay
-  // exactly as recorded) and never touches db.sales.
+  // Family/duplicate detector: flags products whose names reduce to the same
+  // family key -- either the same words in a different order ("4 inch nail"
+  // / "nail 4 inch"), or the same words minus a differing size number
+  // ("10\" double elegance mattrass" / "double 15\" elegance mattrass") --
+  // so a product that was accidentally re-created as its own standalone
+  // item for every size gets surfaced for review instead of silently
+  // cluttering the catalog. Detection is purely a read-only scan -- the
+  // actual merge reuses mergeSelectedIntoGroup(), which only reparents
+  // variants (keeping their IDs, so past Sale rows stay exactly as
+  // recorded) and never touches db.sales.
   const duplicateGroups = useMemo(() => {
     const byKey = new Map<string, Product[]>()
     for (const p of products ?? []) {
       if (p.archived) continue
-      const key = tokenSortKey(p.name)
+      const key = familySortKey(p.name)
       if (!key) continue
       const list = byKey.get(key) ?? []
       list.push(p)
@@ -404,7 +444,7 @@ export default function Inventory() {
     return Array.from(byKey.values()).filter((list) => list.length > 1)
   }, [products])
   const [dismissedDuplicateKeys, setDismissedDuplicateKeys] = useState<Set<string>>(new Set())
-  const visibleDuplicateGroups = duplicateGroups.filter((g) => !dismissedDuplicateKeys.has(tokenSortKey(g[0].name)))
+  const visibleDuplicateGroups = duplicateGroups.filter((g) => !dismissedDuplicateKeys.has(familySortKey(g[0].name)))
 
   function reviewDuplicateGroup(group: Product[]) {
     setSelectedIds(new Set(group.map((p) => p.id!)))
@@ -413,7 +453,7 @@ export default function Inventory() {
   }
 
   function dismissDuplicateGroup(group: Product[]) {
-    setDismissedDuplicateKeys((prev) => new Set(prev).add(tokenSortKey(group[0].name)))
+    setDismissedDuplicateKeys((prev) => new Set(prev).add(familySortKey(group[0].name)))
   }
 
   const allCategories = useMemo(() => {
@@ -527,6 +567,26 @@ export default function Inventory() {
     return { activeList: active, deadStockList: dead }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtered, isolateDeadStock, recentSaleVariantIds, variantsByProduct])
+
+  // SKU view: the same filtered products, flattened to one row per variant
+  // (not per product) and grouped by category -- "labeled and ordered by
+  // the product" instead of a flat, unsorted dump. A loose product's one
+  // "Standard" variant shows just the product name; an actual differentiated
+  // variant shows "Product — Variant".
+  const skuGroups = useMemo(() => {
+    const byCategory = new Map<string, { productId: number; productName: string; variant: Variant }[]>()
+    for (const p of activeList) {
+      const variants = [...(variantsByProduct.get(p.id!) ?? [])].sort((a, b) => a.order - b.order)
+      const list = byCategory.get(p.category) ?? []
+      for (const v of variants) list.push({ productId: p.id!, productName: p.name, variant: v })
+      byCategory.set(p.category, list)
+    }
+    for (const list of byCategory.values()) {
+      list.sort((a, b) => a.productName.localeCompare(b.productName) || a.variant.order - b.variant.order)
+    }
+    return Array.from(byCategory.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  }, [activeList, variantsByProduct])
+  const skuRowCount = skuGroups.reduce((s, [, rows]) => s + rows.length, 0)
 
   const transferVariantOptions = transferProductId ? variantsByProduct.get(transferProductId) ?? [] : []
 
@@ -770,6 +830,24 @@ export default function Inventory() {
           )}
         </div>
 
+        {/* Products = the hierarchical master/variant accordion. SKU = the
+            same filtered catalog flattened to one row per variant, grouped
+            by category and alphabetized by product -- "labeled and ordered
+            by the product" for fast scanning instead of a nested tree. */}
+        <div className="flex rounded-lg bg-gray-100 p-1">
+          {(['products', 'sku'] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              className={`flex-1 rounded-md py-1.5 text-sm font-semibold transition-colors ${
+                viewMode === mode ? 'bg-white text-black shadow-sm' : 'text-gray-500'
+              }`}
+            >
+              {mode === 'products' ? 'Products' : 'SKU'}
+            </button>
+          ))}
+        </div>
+
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           {CHIPS.map((chip) => (
             <button key={chip.key} onClick={() => setActiveChip(chip.key)} className={shopifyChipClass(activeChip === chip.key)}>
@@ -789,10 +867,10 @@ export default function Inventory() {
         {visibleDuplicateGroups.length > 0 && (
           <div className="flex flex-col gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
             <span className="text-xs font-semibold text-amber-800">
-              {visibleDuplicateGroups.length} possible duplicate item{visibleDuplicateGroups.length === 1 ? '' : 's'} found
+              {visibleDuplicateGroups.length} possible duplicate/same-family item{visibleDuplicateGroups.length === 1 ? '' : 's'} found
             </span>
             {visibleDuplicateGroups.map((group) => (
-              <div key={tokenSortKey(group[0].name)} className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5">
+              <div key={familySortKey(group[0].name)} className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5">
                 <span className="min-w-0 truncate text-xs text-gray-700">{group.map((p) => p.name).join('  ·  ')}</span>
                 <div className="flex shrink-0 items-center gap-2">
                   <button onClick={() => dismissDuplicateGroup(group)} className="text-xs font-medium text-gray-400">
@@ -807,42 +885,73 @@ export default function Inventory() {
           </div>
         )}
 
-        <ProductHierarchyTable
-          products={activeList}
-          variantsByProduct={variantsByProduct}
-          selectedIds={selectedIds}
-          onTapProduct={(id) => setDetailProductId(id)}
-          onToggleSelected={toggleSelected}
-          autoExpandId={lastLinkedProductId}
-        />
-        {activeList.length === 0 && deadStockList.length === 0 && (
-          <p className="py-10 text-center text-sm text-gray-500">No products match. Tap + above to add one.</p>
-        )}
+        {viewMode === 'products' ? (
+          <>
+            <ProductHierarchyTable
+              products={activeList}
+              variantsByProduct={variantsByProduct}
+              selectedIds={selectedIds}
+              onTapProduct={(id) => setDetailProductId(id)}
+              onToggleSelected={toggleSelected}
+              autoExpandId={lastLinkedProductId}
+            />
+            {activeList.length === 0 && deadStockList.length === 0 && (
+              <p className="py-10 text-center text-sm text-gray-500">No products match. Tap + above to add one.</p>
+            )}
 
-        {/* Dead Stock drawer -- only rendered while isolating, collapsed by
-            default so the segregated items stay out of the way until
-            deliberately reviewed. */}
-        {isolateDeadStock && deadStockList.length > 0 && (
-          <div className="overflow-hidden rounded-xl border border-amber-200">
-            <button
-              onClick={() => setDeadStockDrawerOpen((v) => !v)}
-              className="flex w-full items-center justify-between bg-amber-50 px-3 py-2.5 text-left"
-            >
-              <span className="text-sm font-semibold text-amber-800">Dead Stock ({deadStockList.length})</span>
-              <ChevronRightIcon className={`h-4 w-4 text-amber-500 transition-transform ${deadStockDrawerOpen ? 'rotate-90' : ''}`} />
-            </button>
-            {deadStockDrawerOpen && (
-              <div className="p-2">
-                <ProductHierarchyTable
-                  products={deadStockList}
-                  variantsByProduct={variantsByProduct}
-                  selectedIds={selectedIds}
-                  onTapProduct={(id) => setDetailProductId(id)}
-                  onToggleSelected={toggleSelected}
-                  autoExpandId={lastLinkedProductId}
-                />
+            {/* Dead Stock drawer -- only rendered while isolating, collapsed
+                by default so the segregated items stay out of the way until
+                deliberately reviewed. */}
+            {isolateDeadStock && deadStockList.length > 0 && (
+              <div className="overflow-hidden rounded-xl border border-amber-200">
+                <button
+                  onClick={() => setDeadStockDrawerOpen((v) => !v)}
+                  className="flex w-full items-center justify-between bg-amber-50 px-3 py-2.5 text-left"
+                >
+                  <span className="text-sm font-semibold text-amber-800">Dead Stock ({deadStockList.length})</span>
+                  <ChevronRightIcon className={`h-4 w-4 text-amber-500 transition-transform ${deadStockDrawerOpen ? 'rotate-90' : ''}`} />
+                </button>
+                {deadStockDrawerOpen && (
+                  <div className="p-2">
+                    <ProductHierarchyTable
+                      products={deadStockList}
+                      variantsByProduct={variantsByProduct}
+                      selectedIds={selectedIds}
+                      onTapProduct={(id) => setDetailProductId(id)}
+                      onToggleSelected={toggleSelected}
+                      autoExpandId={lastLinkedProductId}
+                    />
+                  </div>
+                )}
               </div>
             )}
+          </>
+        ) : (
+          <div className="flex flex-col gap-4">
+            {skuGroups.map(([category, rows]) => (
+              <div key={category}>
+                <div className="mb-1.5 px-1 text-xs font-bold uppercase tracking-wide text-gray-400">
+                  {category} ({rows.length})
+                </div>
+                <div className="overflow-hidden rounded-xl border border-gray-100">
+                  {rows.map((row, i) => (
+                    <button
+                      key={`${row.productId}-${row.variant.id}`}
+                      onClick={() => setDetailProductId(row.productId)}
+                      className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left ${i > 0 ? 'border-t border-gray-50' : ''}`}
+                    >
+                      <span className="min-w-0 flex-1 line-clamp-2 text-sm font-medium text-black">
+                        {skuRowLabel(row.productName, row.variant.label)}
+                      </span>
+                      <span className="tabular shrink-0 text-xs text-gray-500">
+                        {row.variant.stockMyShop + row.variant.stockVishalShop} left
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {skuRowCount === 0 && <p className="py-10 text-center text-sm text-gray-500">No products match.</p>}
           </div>
         )}
       </div>

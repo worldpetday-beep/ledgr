@@ -29,3 +29,22 @@ export function tokenSortKey(name: string): string {
     .sort()
     .join(' ')
 }
+
+// A bare number, optionally with a size/weight unit glued on (dimension
+// words are already collapsed to e.g. "10in" by normalizeItemSearchText
+// before this ever runs) -- "10", "10in", "2ft", "15kg", etc.
+const SIZE_TOKEN_RE = /^\d+(in|ft|cm|mm|g|kg|lb|oz)?$/
+
+// Same idea as tokenSortKey, but additionally drops size/dimension tokens
+// entirely -- so `10" double elegance mattress` and `double 15" elegance
+// mattress` reduce to the exact same key ("double elegance mattress"),
+// surfacing them as one family to merge instead of two unrelated products.
+// This is strictly broader than tokenSortKey (anything caught by that is
+// also caught here), so it's the one actually used for duplicate detection.
+export function familySortKey(name: string): string {
+  return normalizeItemSearchText(name)
+    .split(' ')
+    .filter((t) => t && !SIZE_TOKEN_RE.test(t))
+    .sort()
+    .join(' ')
+}

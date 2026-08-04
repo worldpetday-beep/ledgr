@@ -12,8 +12,10 @@ export interface TicketLineSummary {
 // A fixed, non-editable banner showing the last two already-recorded sales
 // so the user can visually confirm what was just logged before pushing a
 // new one -- the main guard against accidentally re-entering the same
-// ledger line twice in a row.
-function RecentSalesReference() {
+// ledger line twice in a row. Lives on the main Record Sale entry screen
+// (RecordSaleSheet), not this confirm step, so it's visible from the moment
+// entry starts rather than only surfacing right before saving.
+export function RecentSalesReference() {
   const recent = useLiveQuery(() => db.sales.orderBy('timestamp').reverse().filter((s) => !s.voidedAt).limit(2).toArray(), [])
   if (!recent || recent.length === 0) return null
 
@@ -57,7 +59,6 @@ export function LedgerPushReviewPanel({
 }) {
   return (
     <BottomSheet open={open} onClose={() => !saving && onClose()} centered>
-      <RecentSalesReference />
       <h2 className="text-base font-semibold">Confirm this sale?</h2>
       <div className="mt-3 flex flex-col gap-1.5">
         {lineSummaries.map((l) => (

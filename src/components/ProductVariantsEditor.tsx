@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type Variant } from '../db'
 import { PDHeader, PDSaveButton, pdInputClass } from './productDetailShared'
 import { ChevronRightIcon, TrashIcon } from './icons'
-import { money, selectOnFocus } from '../lib/format'
+import { money, selectOnFocus, variantDisplayLabel } from '../lib/format'
 
 function StockField({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
   return (
@@ -34,10 +34,12 @@ function StockField({ label, value, onChange }: { label: string; value: number; 
 
 function SingleVariantEditor({
   variant,
+  productName,
   canDelete,
   onClose,
 }: {
   variant: Variant
+  productName: string
   canDelete: boolean
   onClose: () => void
 }) {
@@ -78,7 +80,7 @@ function SingleVariantEditor({
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
-      <PDHeader title={variant.label} onBack={onClose} right={<PDSaveButton onClick={save} saving={saving} />} />
+      <PDHeader title={variantDisplayLabel(productName, variant.label)} onBack={onClose} right={<PDSaveButton onClick={save} saving={saving} />} />
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="flex flex-col gap-4">
           <div>
@@ -157,6 +159,7 @@ function SingleVariantEditor({
 }
 
 export function ProductVariantsEditor({ productId, onClose }: { productId: number; onClose: () => void }) {
+  const product = useLiveQuery(() => db.products.get(productId), [productId])
   const variants = useLiveQuery(() => db.variants.where('productId').equals(productId).sortBy('order'), [productId])
   const [editingId, setEditingId] = useState<number | null>(null)
 
@@ -171,6 +174,7 @@ export function ProductVariantsEditor({ productId, onClose }: { productId: numbe
     return (
       <SingleVariantEditor
         variant={editing}
+        productName={product?.name ?? ''}
         canDelete={(variants?.length ?? 0) > 1}
         onClose={() => setEditingId(null)}
       />
@@ -188,7 +192,7 @@ export function ProductVariantsEditor({ productId, onClose }: { productId: numbe
             className="flex w-full items-center gap-3 border-b border-gray-50 px-4 py-3 text-left"
           >
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-black">{v.label}</div>
+              <div className="truncate text-sm font-medium text-black">{variantDisplayLabel(product?.name ?? '', v.label)}</div>
               <div className="tabular truncate text-xs text-gray-500">
                 {money(v.sellPrice, v.currency)} · {v.stockMyShop + v.stockVishalShop} in stock
               </div>

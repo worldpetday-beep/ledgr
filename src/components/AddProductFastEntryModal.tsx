@@ -3,30 +3,25 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type Product } from '../db'
 import { shopifyInputClass } from './ShopifyShell'
 import { selectOnFocus } from '../lib/format'
+import { findFamilyMatch } from '../lib/naturalLanguageOrder'
 
-// Finds an existing, non-archived product whose name overlaps with the
-// typed description (either containing it or contained by it) -- same
-// loose substring rule RecordSaleSheet's findMasterProductMatch uses, so
-// typing "6ft Zinc Sheet" surfaces the existing "Zinc" product/master the
-// same way a checkout line would.
-function findRelatedProduct(typed: string, products: Product[]): Product | null {
+// Live autocomplete candidates while typing (before a product's been
+// locked in) -- simple substring match, same rule RecordSaleSheet's own
+// suggestion dropdown uses.
+function searchProducts(typed: string, products: Product[]): Product[] {
   const clean = typed.trim().toLowerCase()
-  if (clean.length < 3) return null
-  for (const p of products) {
-    if (p.archived) continue
-    const name = p.name.toLowerCase()
-    if (name === clean) continue
-    if (clean.includes(name) || name.includes(clean)) return p
-  }
-  return null
+  if (clean.length < 2) return []
+  return products.filter((p) => !p.archived && p.name.toLowerCase().includes(clean)).slice(0, 6)
 }
 
 // Compact replacement for the old full-screen "New product" page: a
 // centered modal with just the three fields a fast walk-in entry actually
 // needs (description, cost, stock qty), Enter chained straight through all
-// three into a final confirm step, plus an inline fuzzy-match suggestion
-// that offers to fold the new item into an existing product/master instead
-// of always spinning up a brand-new standalone one.
+// three into a final confirm step. The description field doubles as a
+// product autocomplete: typing "stan..." surfaces "Standing Fan", tapping it
+// locks that name into the field and lets you keep typing straight past it
+// (e.g. " Big Grey") to define just the new variant's differentiator --
+// no separate fields, no re-typing the product name.
 export function AddProductFastEntryModal({
   onClose,
   onCreated,
@@ -58,16 +53,64 @@ export function AddProductFastEntryModal({
     return counts
   }, []) ?? new Map<number, number>()
 
-  const suggestion = useMemo(() => {
-    if (parentProduct) return null
-    return findRelatedProduct(description, products)
-  }, [description, products, parentProduct])
+  const suggestions = useMemo(() => (parentProduct ? [] : searchProducts(description, products)), [description, products, parentProduct])
 
-  const suggestionIsMaster = suggestion ? (variantCounts.get(suggestion.id!) ?? 0) > 1 : false
+  // Falls back to the size-aware family matcher (e.g. an existing "10\"
+  // Elegance Mattress" when typing "15\" Elegance Mattress") whenever plain
+  // substring search comes up empty, so a new size still gets offered its
+  // family instead of only ever suggesting exact-ish name matches.
+  const familySuggestion = useMemo(() => {
+    if (parentProduct || suggestions.length > 0) return null
+    return findFamilyMatch(description, products)
+  }, [description, products, parentProduct, suggestions.length])
+
+  const suggestionIsMaster = (p: Product) => (variantCounts.get(p.id!) ?? 0) > 1
+
+  // Locks the product name into the field and hands focus straight back so
+  // typing continues right after it -- e.g. field becomes "Standing Fan "
+  // with the cursor at the end, ready for "Big Grey".
+  function lockToProduct(p: Product) {
+    setParentProduct(p)
+    setDescription(`${p.name} `)
+    requestAnimationFrame(() => {
+      const el = descRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(el.value.length, el.value.length)
+      }
+    })
+  }
+
+  function onDescriptionChange(value: string) {
+    setDescription(value)
+    // Backspacing back past the locked product's own name un-locks it,
+    // returning to free typing/matching instead of leaving a stale lock.
+    if (parentProduct && !value.toLowerCase().startsWith(parentProduct.name.toLowerCase())) {
+      setParentProduct(null)
+    }
+  }
+
+  // What actually gets saved as the variant's differentiator: everything
+  // typed after the locked product's own name, trimmed of the "—"/space
+  // connective the field itself doesn't need to carry.
+  const variantSuffix = useMemo(() => {
+    if (!parentProduct) return ''
+    return description.slice(parentProduct.name.length).replace(/^[\s—-]+/, '').trim()
+  }, [description, parentProduct])
+
+  const canContinue = parentProduct ? variantSuffix.length > 0 : description.trim().length > 0
 
   function onDescriptionEnter(e: KeyboardEvent) {
     if (e.key !== 'Enter') return
     e.preventDefault()
+    if (!parentProduct && suggestions.length > 0) {
+      lockToProduct(suggestions[0])
+      return
+    }
+    if (!parentProduct && familySuggestion) {
+      lockToProduct(familySuggestion)
+      return
+    }
     costRef.current?.focus()
   }
 
@@ -80,7 +123,7 @@ export function AddProductFastEntryModal({
   function onStockEnter(e: KeyboardEvent) {
     if (e.key !== 'Enter') return
     e.preventDefault()
-    if (!description.trim()) {
+    if (!canContinue) {
       descRef.current?.focus()
       return
     }
@@ -88,10 +131,9 @@ export function AddProductFastEntryModal({
   }
 
   async function confirmSave() {
-    if (!description.trim() || saving) return
+    if (!canContinue || saving) return
     setSaving(true)
     const now = Date.now()
-    const name = description.trim()
     const cost = Number(costPrice) || 0
     const qty = Number(stockQty) || 0
 
@@ -109,7 +151,7 @@ export function AddProductFastEntryModal({
           }
           await db.variants.add({
             productId: parentProduct.id!,
-            label: name,
+            label: `${parentProduct.name} - ${variantSuffix}`,
             optionValues: [],
             costPrice: cost,
             costUnknown: false,
@@ -127,6 +169,7 @@ export function AddProductFastEntryModal({
           return parentProduct.id!
         }
 
+        const name = description.trim()
         const newProductId = (await db.products.add({
           name,
           category: 'General',
@@ -174,39 +217,63 @@ export function AddProductFastEntryModal({
 
         {stage === 'entry' ? (
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">Item Description</label>
+            <div className="relative">
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">
+                {parentProduct ? 'Item Description' : 'Item Description (or existing product)'}
+              </label>
               <input
                 ref={descRef}
                 className={shopifyInputClass}
-                placeholder="e.g. Star Special Double Mattress"
+                placeholder="e.g. Standing Fan Big Grey"
                 value={description}
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="off"
                 spellCheck={false}
-                onChange={(e) => {
-                  setDescription(e.target.value)
-                  setParentProduct(null)
-                }}
+                onChange={(e) => onDescriptionChange(e.target.value)}
                 onKeyDown={onDescriptionEnter}
               />
-              {suggestion && (
-                <button
-                  type="button"
-                  onClick={() => setParentProduct(suggestion)}
-                  className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800"
-                >
-                  {suggestionIsMaster ? `Add under "${suggestion.name}"?` : `Combine under "${suggestion.name}" folder?`}
-                </button>
-              )}
-              {parentProduct && (
+              {parentProduct ? (
                 <span className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">
-                  Linking under "{parentProduct.name}"
-                  <button type="button" onClick={() => setParentProduct(null)} aria-label="Remove link" className="text-emerald-600">
+                  {variantSuffix ? `New variant under "${parentProduct.name}"` : `Keep typing the variant, e.g. "Big Grey"`}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setParentProduct(null)
+                      setDescription('')
+                      descRef.current?.focus()
+                    }}
+                    aria-label="Remove link"
+                    className="text-emerald-600"
+                  >
                     ×
                   </button>
                 </span>
+              ) : (
+                (suggestions.length > 0 || familySuggestion) && (
+                  <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
+                    {suggestions.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => lockToProduct(p)}
+                        className="flex w-full items-center justify-between border-b border-gray-50 px-3 py-2 text-left text-sm last:border-b-0 hover:bg-gray-50"
+                      >
+                        <span className="min-w-0 truncate">{p.name}</span>
+                        {suggestionIsMaster(p) && <span className="shrink-0 text-xs text-gray-400">has variants</span>}
+                      </button>
+                    ))}
+                    {suggestions.length === 0 && familySuggestion && (
+                      <button
+                        type="button"
+                        onClick={() => lockToProduct(familySuggestion)}
+                        className="flex w-full items-center px-3 py-2 text-left text-sm text-amber-700 hover:bg-amber-50"
+                      >
+                        Add new size/variant under "{familySuggestion.name}"?
+                      </button>
+                    )}
+                  </div>
+                )
               )}
             </div>
 
@@ -245,7 +312,7 @@ export function AddProductFastEntryModal({
 
             <button
               type="button"
-              disabled={!description.trim()}
+              disabled={!canContinue}
               onClick={() => setStage('confirm')}
               className="mt-auto w-full rounded-lg bg-black py-2.5 text-sm font-semibold text-white disabled:opacity-30"
             >
@@ -257,7 +324,9 @@ export function AddProductFastEntryModal({
             <div className="flex flex-col gap-2 rounded-xl border border-gray-100 p-3 text-sm">
               <div className="flex justify-between gap-3">
                 <span className="text-gray-500">Item</span>
-                <span className="min-w-0 truncate text-right font-semibold">{description.trim()}</span>
+                <span className="min-w-0 truncate text-right font-semibold">
+                  {parentProduct ? `${parentProduct.name} - ${variantSuffix}` : description.trim()}
+                </span>
               </div>
               <div className="flex justify-between gap-3">
                 <span className="text-gray-500">Cost Price</span>

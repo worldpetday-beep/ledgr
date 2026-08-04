@@ -48,6 +48,16 @@ export function formatShortDateMonrovia(ts: number): string {
   return new Date(ts).toLocaleDateString('en-US', { timeZone: MONROVIA_TZ, month: 'short', day: 'numeric' })
 }
 
+// "Standard" is the internal placeholder label a single, un-differentiated
+// variant gets on creation -- it's real data (never rewritten or deleted),
+// but it carries zero identifying information for a human reading the UI,
+// so nothing ever displays it literally. A loose/base variant just shows
+// the product's own name instead; anything actually differentiated (e.g.
+// "Big Grey") still shows as-is.
+export function variantDisplayLabel(productName: string, variantLabel: string): string {
+  return variantLabel === 'Standard' ? productName : variantLabel
+}
+
 // Stable sortable/comparable key for "which Monrovia calendar day is this
 // timestamp in" — used to group a list of timestamps by date.
 export function dateKeyMonrovia(ts: number): string {

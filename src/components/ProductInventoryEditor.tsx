@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db'
 import { PDHeader } from './productDetailShared'
-import { selectOnFocus } from '../lib/format'
+import { selectOnFocus, variantDisplayLabel } from '../lib/format'
 
 function InlineStepper({ value, onCommit }: { value: number; onCommit: (n: number) => void }) {
   const [text, setText] = useState(String(value))
@@ -48,6 +48,7 @@ function InlineStepper({ value, onCommit }: { value: number; onCommit: (n: numbe
 // Every variant's stock in one flat, fast-editing list -- no need to drill
 // into each variant's full editor just to bump a count.
 export function ProductInventoryEditor({ productId, onClose }: { productId: number; onClose: () => void }) {
+  const product = useLiveQuery(() => db.products.get(productId), [productId])
   const variants = useLiveQuery(() => db.variants.where('productId').equals(productId).sortBy('order'), [productId])
 
   async function commitMyShop(variantId: number, next: number) {
@@ -67,7 +68,7 @@ export function ProductInventoryEditor({ productId, onClose }: { productId: numb
       <div className="flex-1 overflow-y-auto">
         {(variants ?? []).map((v) => (
           <div key={v.id} className="flex items-center gap-3 border-b border-gray-50 px-4 py-3">
-            <div className="min-w-0 flex-1 truncate text-sm font-medium text-black">{v.label}</div>
+            <div className="min-w-0 flex-1 truncate text-sm font-medium text-black">{variantDisplayLabel(product?.name ?? '', v.label)}</div>
             <InlineStepper value={v.stockMyShop} onCommit={(n) => commitMyShop(v.id!, n)} />
             <InlineStepper value={v.stockVishalShop} onCommit={(n) => commitVishalShop(v.id!, n)} />
           </div>
