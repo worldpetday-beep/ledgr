@@ -491,10 +491,10 @@ function ItemEntryBlock({
           onChange={(e) => onUpdate({ qty: Number(e.target.value) || 1 })}
           onKeyDown={onQtyEnter}
         />
-        <div className="relative w-16 shrink-0">
+        <div className="relative w-20 shrink-0">
           <input
             ref={unitRef}
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-1.5 py-2 text-center text-xs font-medium outline-none focus:border-[var(--series-1)]"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--page-plane)] px-1.5 py-2.5 text-center text-sm font-medium outline-none focus:border-[var(--series-1)]"
             placeholder="pcs"
             value={item.unitAbbrev}
             autoComplete="off"
@@ -525,66 +525,7 @@ function ItemEntryBlock({
             </div>
           )}
         </div>
-        <div className="relative min-w-0 flex-1">
-          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-          <input
-            ref={descRef}
-            className={inputClass + ' pl-9'}
-            placeholder='e.g. 1pc wheel barrow tire, 2 bags cement'
-            value={item.query}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            onChange={(e) => onUpdate({ query: e.target.value, selectedProduct: null, selectedVariantId: null })}
-            onKeyDown={onDescriptionEnter}
-            onBlur={applyNaturalLanguageParse}
-          />
-          {/* One clean line per suggestion -- product name leads, "Standard"
-              never shows, and there's no stock/cost clutter fighting for
-              room. "+ Create New" is always pinned at the bottom, never
-              hidden just because a weak match exists, so there's always an
-              explicit way to say "no, this is genuinely new" instead of
-              being stuck picking the closest wrong thing. */}
-          {item.query && !item.selectedProduct && (
-            <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
-              {itemSuggestions.map((s) => (
-                <button
-                  key={s.key}
-                  type="button"
-                  onClick={() => {
-                    pickSuggestion(s)
-                    onAdvanceToTotals()
-                  }}
-                  className="flex w-full items-center px-3 py-2 text-left hover:bg-[var(--page-plane)]"
-                >
-                  <span className="min-w-0 flex-1 truncate text-sm">
-                    {s.masterName ? (
-                      <>
-                        {s.masterName}
-                        {variantDisplayLabel(s.masterName, s.variantLabel) !== s.masterName && (
-                          <span className="text-[var(--text-muted)]"> — {variantDisplayLabel(s.masterName, s.variantLabel)}</span>
-                        )}
-                      </>
-                    ) : (
-                      s.variantLabel
-                    )}
-                  </span>
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => {
-                  pickCreateNew()
-                  onAdvanceToTotals()
-                }}
-                className="flex w-full items-center border-t border-[var(--border)] px-3 py-2 text-left text-sm font-medium text-[var(--series-1)] hover:bg-[var(--page-plane)]"
-              >
-                {familyMatchForQuery ? `+ Add new size/variant under "${familyMatchForQuery.name}"` : `+ Create New: "${item.query.trim()}"`}
-              </button>
-            </div>
-          )}
-        </div>
+        <span className="flex-1" />
         <button
           type="button"
           onClick={() => {
@@ -592,10 +533,75 @@ function ItemEntryBlock({
             onAddItem()
           }}
           aria-label="Add item"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--series-1)] text-white"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--series-1)] text-white"
         >
           <PlusIcon className="h-4 w-4" />
         </button>
+      </div>
+
+      {/* Full-width on its own line -- both the typed name and every
+          suggestion below it get the whole card's width to read, instead
+          of squeezing into whatever space was left after the qty/unit
+          boxes. */}
+      <div className="relative mt-2.5">
+        <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+        <input
+          ref={descRef}
+          className={inputClass + ' pl-9'}
+          placeholder='e.g. 1pc wheel barrow tire, 2 bags cement'
+          value={item.query}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          onChange={(e) => onUpdate({ query: e.target.value, selectedProduct: null, selectedVariantId: null })}
+          onKeyDown={onDescriptionEnter}
+          onBlur={applyNaturalLanguageParse}
+        />
+        {/* One clean line per suggestion -- product name leads, "Standard"
+            never shows, and there's no stock/cost clutter fighting for
+            room. "+ Create New" is always pinned at the bottom, never
+            hidden just because a weak match exists, so there's always an
+            explicit way to say "no, this is genuinely new" instead of
+            being stuck picking the closest wrong thing. */}
+        {item.query && !item.selectedProduct && (
+          <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)] shadow-lg">
+            {itemSuggestions.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => {
+                  pickSuggestion(s)
+                  onAdvanceToTotals()
+                }}
+                className="flex w-full items-center px-3 py-2.5 text-left hover:bg-[var(--page-plane)]"
+              >
+                <span className="min-w-0 flex-1 truncate text-sm">
+                  {s.masterName ? (
+                    <>
+                      {s.masterName}
+                      {variantDisplayLabel(s.masterName, s.variantLabel) !== s.masterName && (
+                        <span className="text-[var(--text-muted)]"> — {variantDisplayLabel(s.masterName, s.variantLabel)}</span>
+                      )}
+                    </>
+                  ) : (
+                    s.variantLabel
+                  )}
+                </span>
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                pickCreateNew()
+                onAdvanceToTotals()
+              }}
+              className="flex w-full items-center border-t border-[var(--border)] px-3 py-2.5 text-left text-sm font-medium text-[var(--series-1)] hover:bg-[var(--page-plane)]"
+            >
+              {familyMatchForQuery ? `+ Add new size/variant under "${familyMatchForQuery.name}"` : `+ Create New: "${item.query.trim()}"`}
+            </button>
+          </div>
+        )}
       </div>
 
       {!item.selectedProduct && item.query && (
