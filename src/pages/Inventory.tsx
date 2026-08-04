@@ -29,6 +29,7 @@ import {
 import { isLowStock, selectOnFocus, variantDisplayLabel } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
 import { familySortKey } from '../lib/itemMatch'
+import { reorderVariantLabel, guessCategory } from '../lib/catalogCleanup'
 import { useAppActions } from '../context/AppActions'
 import { format } from 'date-fns'
 
@@ -323,23 +324,21 @@ function ProductHierarchyTable({
             </div>
 
             {/* Child rows -- indented beneath the parent behind a light
-                vertical guide line. Name gets its own full-width line (so a
-                long/combo label never has to fight the numeric cells for
-                room); Cost Price / Stock Left sit on their own line below,
-                horizontally scrollable so more tracking columns can be
-                added later without redesigning the row. */}
+                vertical guide line, all in one compact line (name wraps up
+                to 2 lines only if it's genuinely long -- most cleaned-up
+                labels are short enough to sit on one line with Cost Price
+                and Stock Left right beside them, instead of every row
+                always reserving a full second line it doesn't need). */}
             {expanded && variants.map((v) => (
-              <div key={v.id} className="flex flex-col gap-1.5 border-t border-gray-50 py-2 pl-3 pr-3">
-                <div className="flex items-start gap-2">
-                  <span className="mt-1 h-4 w-3 shrink-0 self-stretch border-l-2 border-gray-200" />
-                  <EditableTitle value={v.label} productName={product.name} onCommit={(next) => commitTitle(v, next)} />
-                  {isRecentlyNew(v) && (
-                    <span className="mt-0.5 shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700">
-                      New
-                    </span>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-2 overflow-x-auto pl-5">
+              <div key={v.id} className="flex items-center gap-2 border-t border-gray-50 py-1.5 pl-3 pr-3">
+                <span className="h-6 w-3 shrink-0 self-stretch border-l-2 border-gray-200" />
+                <EditableTitle value={v.label} productName={product.name} onCommit={(next) => commitTitle(v, next)} />
+                {isRecentlyNew(v) && (
+                  <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700">
+                    New
+                  </span>
+                )}
+                <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto">
                   <EditableCell label="Cost Price" value={v.costPrice} onCommit={(n) => commitCostPrice(v, n)} />
                   <StockStepper value={v.stockMyShop} onCommit={(n) => commitStock(v, n)} />
                 </div>
@@ -382,7 +381,7 @@ export default function Inventory() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [groupSheetOpen, setGroupSheetOpen] = useState(false)
   const [lastLinkedProductId, setLastLinkedProductId] = useState<number | null>(null)
-  const [groupTarget, setGroupTarget] = useState<'new' | number>('new')
+  const [groupTarget, setGroupTarget] = useState<'new' | number>(-1)
   const [groupNewName, setGroupNewName] = useState('')
   const [groupTargetQuery, setGroupTargetQuery] = useState('')
 
@@ -647,66 +646,29 @@ export default function Inventory() {
     setSelectedIds(new Set())
   }
 
-  // Prompts for a master product name, then reparents every selected
-  // product's variants under one new master (reusing the exact same safe
-  // merge as Group…/duplicate-resolve: variant IDs are kept, so historical
-  // Sale rows never change), and finally expands that master's accordion
-  // so the freshly linked rows are immediately visible.
-  async function linkToMasterProduct() {
-    const sourceIds = Array.from(selectedIds)
-    if (sourceIds.length === 0) return
-    const name = window.prompt('Master product name:')?.trim()
-    if (!name) return
-    const now = Date.now()
-
-    const targetId = await db.transaction('rw', db.products, db.variants, async () => {
-      const newTargetId = (await db.products.add({
-        name,
-        category: 'General',
-        description: '',
-        images: [],
-        options: [],
-        archived: false,
-        createdAt: now,
-        updatedAt: now,
-      })) as number
-
-      for (const sourceId of sourceIds) {
-        const source = await db.products.get(sourceId)
-        if (!source) continue
-        const vs = await db.variants.where('productId').equals(sourceId).toArray()
-        for (const v of vs) {
-          const label = v.label === 'Standard' ? source.name : `${source.name} — ${v.label}`
-          await db.variants.update(v.id!, { productId: newTargetId, label, updatedAt: now })
-        }
-        await db.products.delete(sourceId)
-      }
-      return newTargetId
-    })
-
-    clearSelection()
-    setLastLinkedProductId(targetId)
-  }
-
-  // Merges the selected quick-sale/raw-text products into one master
-  // product: each source product's variant(s) are reparented (their IDs are
-  // kept, so past Sale rows referencing them stay intact) and, if a variant
-  // still has the generic "Standard" label, renamed to the exact string the
-  // source product was originally typed as -- then the now-empty source
-  // product shell is deleted.
+  // "Move to…" -- the one merge/organize action: reparents every selected
+  // product's variant(s) under either a brand-new product or an existing
+  // one. Variant IDs are always kept (so historical Sale rows never
+  // change); a variant still on the generic "Standard" label gets renamed
+  // to its old source product's name, and every resulting label is run
+  // through reorderVariantLabel() to drop the redundant "SourceName — "
+  // prefix and reorder into the shop's SIZE-quality-TYPE reading order.
+  // A brand-new target product gets its category auto-guessed from its
+  // name (Mattresses/Generators/Zinc Sheets/etc.) instead of always
+  // landing in "General".
   async function mergeSelectedIntoGroup() {
     const sourceIds = Array.from(selectedIds)
     if (sourceIds.length === 0) return
     const now = Date.now()
 
-    await db.transaction('rw', db.products, db.variants, async () => {
-      let targetId: number
+    const targetId = await db.transaction('rw', db.products, db.variants, async () => {
+      let target: number
       if (groupTarget === 'new') {
         const name = groupNewName.trim()
-        if (!name) return
-        targetId = (await db.products.add({
+        if (!name) return null
+        target = (await db.products.add({
           name,
-          category: 'General',
+          category: guessCategory(name) ?? 'General',
           description: '',
           images: [],
           options: [],
@@ -715,26 +677,61 @@ export default function Inventory() {
           updatedAt: now,
         })) as number
       } else {
-        targetId = groupTarget
+        target = groupTarget
       }
 
       for (const sourceId of sourceIds) {
-        if (sourceId === targetId) continue
+        if (sourceId === target) continue
         const source = await db.products.get(sourceId)
         if (!source) continue
         const vs = await db.variants.where('productId').equals(sourceId).toArray()
         for (const v of vs) {
-          const label = v.label === 'Standard' ? source.name : `${source.name} — ${v.label}`
-          await db.variants.update(v.id!, { productId: targetId, label, updatedAt: now })
+          const rawLabel = v.label === 'Standard' ? source.name : v.label
+          const label = reorderVariantLabel(rawLabel)
+          await db.variants.update(v.id!, { productId: target, label, updatedAt: now })
         }
         await db.products.delete(sourceId)
       }
+      return target
     })
 
     setGroupSheetOpen(false)
     setGroupNewName('')
     setGroupTarget('new')
     clearSelection()
+    if (targetId != null) setLastLinkedProductId(targetId)
+  }
+
+  // Scans every variant/product once and cleans up existing data in place
+  // -- never reparents, never deletes, never touches ids/stock/sale
+  // history. Reorders each variant's label (see reorderVariantLabel) and
+  // backfills a real category for any product still sitting on "General"
+  // whose name matches a known keyword. Safe to run repeatedly: anything
+  // already clean is simply left alone (no-op, no write).
+  async function cleanUpCatalog() {
+    let labelsChanged = 0
+    let categoriesChanged = 0
+    await db.transaction('rw', db.products, db.variants, async () => {
+      const allProducts = await db.products.toArray()
+      for (const p of allProducts) {
+        if ((!p.category || p.category === 'General')) {
+          const guess = guessCategory(p.name)
+          if (guess) {
+            await db.products.update(p.id!, { category: guess, updatedAt: Date.now() })
+            categoriesChanged++
+          }
+        }
+      }
+      const allVariants = await db.variants.toArray()
+      for (const v of allVariants) {
+        const next = reorderVariantLabel(v.label)
+        if (next !== v.label) {
+          await db.variants.update(v.id!, { label: next, updatedAt: Date.now() })
+          labelsChanged++
+        }
+      }
+    })
+    window.alert(`Cleaned up ${labelsChanged} variant name${labelsChanged === 1 ? '' : 's'} and ${categoriesChanged} product categor${categoriesChanged === 1 ? 'y' : 'ies'}.`)
   }
 
   function openUnitsEditor(categoryName: string) {
@@ -780,11 +777,11 @@ export default function Inventory() {
       }
     >
       <div className="flex flex-col gap-4">
-        {/* Persistent top bar: search (left), Select Filtered (center),
-            Link to Master Product (right) -- always visible, not gated
-            behind a separate "select mode" toggle. Wraps to two lines on
-            narrow phones since cramming all three into one literal row
-            would clip on a 390px screen, but it's one cohesive block. */}
+        {/* Persistent top bar: search (left), Select Filtered + Move to…
+            (right) -- always visible, not gated behind a separate "select
+            mode" toggle. Wraps to two lines on narrow phones since cramming
+            all three into one literal row would clip on a 390px screen,
+            but it's one cohesive block. */}
         <div className="flex flex-col gap-2 rounded-xl border border-gray-100 bg-gray-50 p-2">
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
@@ -812,20 +809,17 @@ export default function Inventory() {
               Select Filtered{query.trim() ? ` (${filtered.length})` : ''}
             </button>
             <button
-              onClick={linkToMasterProduct}
+              onClick={() => setGroupSheetOpen(true)}
               disabled={selectedIds.size === 0}
               className="shrink-0 rounded-lg bg-black px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-30"
             >
-              Link to Master Product
+              Move to…
             </button>
           </div>
           {selectedIds.size > 0 && (
             <div className="flex items-center justify-between gap-2 text-xs">
               <span className="font-medium text-gray-700">{selectedIds.size} selected</span>
-              <div className="flex items-center gap-3">
-                <button onClick={clearSelection} className="font-medium text-gray-500">Clear</button>
-                <button onClick={() => setGroupSheetOpen(true)} className="font-semibold text-gray-700">Group into existing…</button>
-              </div>
+              <button onClick={clearSelection} className="font-medium text-gray-500">Clear</button>
             </div>
           )}
         </div>
@@ -1075,6 +1069,16 @@ export default function Inventory() {
             <SettingsIcon className="h-5 w-5 text-gray-500" />
             Units per category
           </button>
+          <button
+            onClick={() => {
+              setMoreMenuOpen(false)
+              cleanUpCatalog()
+            }}
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+          >
+            <EditIcon className="h-5 w-5 text-gray-500" />
+            Clean up variant names &amp; categories
+          </button>
         </div>
       </BottomSheet>
 
@@ -1180,20 +1184,21 @@ export default function Inventory() {
         </div>
       </BottomSheet>
 
-      {/* Group selected raw-text items into one master product */}
+      {/* Move selected items to a parent product -- either an existing
+          family (Mattress, Generators, Zincs, …) or a brand-new one. */}
       <BottomSheet open={groupSheetOpen} onClose={() => setGroupSheetOpen(false)} contentClassName="!bg-white !text-black">
         <div className="flex flex-col gap-3 pt-2">
-          <h2 className="text-base font-semibold">Group {selectedIds.size} item{selectedIds.size === 1 ? '' : 's'}</h2>
+          <h2 className="text-base font-semibold">Move {selectedIds.size} item{selectedIds.size === 1 ? '' : 's'} to…</h2>
           <p className="text-xs text-gray-500">
-            Each selected item becomes its own variant under one master product — nothing is deleted, just reorganized.
+            Each selected item becomes its own variant under the product you pick — nothing is deleted, just reorganized.
           </p>
 
           <div className="flex gap-2">
-            <button onClick={() => setGroupTarget('new')} className={shopifyChipClass(groupTarget === 'new') + ' flex-1'}>
-              New group
-            </button>
             <button onClick={() => setGroupTarget(typeof groupTarget === 'number' ? groupTarget : -1)} className={shopifyChipClass(typeof groupTarget === 'number') + ' flex-1'}>
               Existing product
+            </button>
+            <button onClick={() => setGroupTarget('new')} className={shopifyChipClass(groupTarget === 'new') + ' flex-1'}>
+              New product
             </button>
           </div>
 
@@ -1201,15 +1206,16 @@ export default function Inventory() {
             <input
               autoFocus
               className={shopifyInputClass}
-              placeholder="Master group name, e.g. Mattress Group"
+              placeholder="New product name, e.g. Mattress"
               value={groupNewName}
               onChange={(e) => setGroupNewName(e.target.value)}
             />
           ) : (
             <div className="flex flex-col gap-2">
               <input
+                autoFocus
                 className={shopifyInputClass}
-                placeholder="Search products"
+                placeholder="Search products, e.g. Mattress, Generators, Zinc"
                 value={groupTargetQuery}
                 onChange={(e) => setGroupTargetQuery(e.target.value)}
               />
@@ -1237,7 +1243,7 @@ export default function Inventory() {
             disabled={groupTarget === 'new' ? !groupNewName.trim() : typeof groupTarget !== 'number' || groupTarget < 0}
             className="mt-1 w-full rounded-lg bg-black py-2.5 text-sm font-semibold text-white disabled:opacity-30"
           >
-            Group items
+            Move items
           </button>
         </div>
       </BottomSheet>
