@@ -148,6 +148,11 @@ export interface DrawerCount {
   openUsdOverride?: number
   openLrdOverride?: number
   closed?: boolean
+  // Photos of the physical ledger/receipt/calculator for this day, kept as
+  // a fallback for when there's only time to see the total and snap a
+  // picture rather than itemize every line. Any file type is accepted, not
+  // just images (e.g. a scanned PDF), so this isn't restricted to photos.
+  attachments?: Blob[]
 }
 
 export type WarehouseLedgerDirection = 'in' | 'out' // in = received from source; out = sent to source

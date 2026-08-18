@@ -7,13 +7,14 @@ import {
   reserveNextOrderNumber,
   EXCHANGE_RATE_KEY,
   DEFAULT_EXCHANGE_RATE,
+  UNIT_TYPES,
   type Currency,
   type FulfillmentLocation,
   type Product,
   type Variant,
 } from '../db'
 import { AddProductFastEntryModal } from '../components/AddProductFastEntryModal'
-import { money, dateKeyMonrovia, formatShortDateMonrovia, variantDisplayLabel } from '../lib/format'
+import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
 import { itemSearchMatches } from '../lib/itemMatch'
 
@@ -30,6 +31,7 @@ interface CartLine {
   variantId: number
   label: string
   qty: number
+  unitType: string
   price: number
   currency: Currency
   cost: number
@@ -40,6 +42,35 @@ interface CartLine {
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const DAY_MS = 86400000
+
+// Always includes the product name -- unlike variantDisplayLabel (which
+// drops it once a variant has a real, already-descriptive label, since
+// that's correct inside a nested per-product view), a flat cross-catalog
+// list like Sell's search results has no other context on the row, so
+// "14G" alone is meaningless without "Zinc — " in front of it.
+function sellLabel(productName: string, variantLabel: string): string {
+  return variantLabel === 'Standard' ? productName : `${productName} — ${variantLabel}`
+}
+
+// A word in the name wins over the category guess -- so "Zinc Gutter"
+// still guesses "Piece" even though the rest of the Zinc line sells by
+// the sheet/bundle. Same shape as the counter-ledger reference's own
+// guessUnit, just mapped onto this app's UNIT_TYPES vocabulary.
+const NAME_UNIT_HINTS: [RegExp, string][] = [
+  [/\b(wire|cable|hose|wallpaper|tape)\b/i, 'Roll'],
+  [/\b(gutter|barrow|tire|mirror|fan|lock|switch|socket|bulb|iron|kettle|stove|blender|flask|pump|generator|stabali[sz]er|panel box|breaker)\b/i, 'Piece'],
+  [/\b(zinc|sheet|ply|board)\b/i, 'Sheet'],
+  [/\b(paint|thinner)\b/i, 'Bucket'],
+  [/\b(cement|nail|screw|clip)\b/i, 'Pack'],
+  [/\b(tile|tiles)\b/i, 'Carton'],
+  [/\b(mattress|chair|table|freezer|refrigerator|tv|speaker)\b/i, 'Piece'],
+]
+function guessUnit(name: string, category: string): string {
+  for (const [re, u] of NAME_UNIT_HINTS) if (re.test(name)) return u
+  if (/roofing/i.test(category)) return 'Sheet'
+  if (/wire/i.test(category)) return 'Roll'
+  return 'Piece'
+}
 
 // The one screen that has to be fast: search is pinned under the header and
 // autofocused, results are compact one-line rows (no grid tiles), a leading
@@ -94,7 +125,7 @@ export default function Sell() {
       .map((v) => {
         const product = productById.get(v.productId)
         if (!product) return null
-        return { key: `${product.id}-${v.id}`, product, variant: v, label: variantDisplayLabel(product.name, v.label) }
+        return { key: `${product.id}-${v.id}`, product, variant: v, label: sellLabel(product.name, v.label) }
       })
       .filter((c): c is Candidate => c != null)
   }, [variants, productById])
@@ -126,6 +157,7 @@ export default function Sell() {
           variantId: c.variant.id!,
           label: c.label,
           qty: n,
+          unitType: guessUnit(`${c.product.name} ${c.variant.label}`, c.product.category),
           price: c.variant.sellPrice,
           currency: c.variant.currency,
           cost: c.variant.costPrice,
@@ -147,7 +179,7 @@ export default function Sell() {
     const created = await db.variants.where('productId').equals(productId).last()
     const product = await db.products.get(productId)
     if (!created || !product) return
-    add({ key: `${productId}-${created.id}`, product, variant: created, label: variantDisplayLabel(product.name, created.label) }, qty)
+    add({ key: `${productId}-${created.id}`, product, variant: created, label: sellLabel(product.name, created.label) }, qty)
   }
 
   const items = cart.reduce((s, l) => s + l.qty * l.price, 0)
@@ -296,6 +328,10 @@ function SettleSheet({
   const [who, setWho] = useState('')
   const [focus, setFocus] = useState<KeypadTarget>('deal')
   const [saving, setSaving] = useState(false)
+  const [unitPickerFor, setUnitPickerFor] = useState<string | null>(null)
+
+  const savedUnitsRows = useLiveQuery(() => db.customUnits.orderBy('label').toArray(), [])
+  const allUnits = [...UNIT_TYPES.filter((u) => u !== 'Other'), ...(savedUnitsRows ?? []).map((r) => r.label)]
 
   const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
   const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
@@ -353,6 +389,7 @@ function SettleSheet({
             variantId: l.variantId,
             itemName: l.label,
             qty: l.qty,
+            unitType: l.unitType,
             soldFor: lineAgreed,
             costAtSale: l.cost * l.qty,
             currency,
@@ -399,7 +436,11 @@ function SettleSheet({
                 </button>
                 <span className="nm">
                   <b>{l.label}</b>
-                  <small>{l.qty} · cost {money(l.cost, l.currency)}{l.tbs ? ' · collect later' : ''}</small>
+                  <small>
+                    {l.qty}{' '}
+                    <button onClick={() => setUnitPickerFor(l.key)} style={{ textDecoration: 'underline', color: 'inherit', font: 'inherit' }}>{l.unitType}</button>
+                    {' · cost '}{money(l.cost, l.currency)}{l.tbs ? ' · collect later' : ''}
+                  </small>
                 </span>
                 <span className="stp">
                   <button onClick={() => setCart((prev) => prev.map((x) => (x.key === l.key ? { ...x, qty: Math.max(1, x.qty - 1) } : x)))}>−</button>
@@ -480,6 +521,31 @@ function SettleSheet({
           </button>
         </div>
       </div>
+
+      {unitPickerFor && (
+        <div className="sheet" style={{ zIndex: 55 }} onClick={(e) => { e.stopPropagation(); setUnitPickerFor(null) }}>
+          <div className="sbox" onClick={(e) => e.stopPropagation()}>
+            <div className="grab" />
+            <div className="scroll" style={{ paddingBottom: 16 }}>
+              <p className="eb">Sold by which unit?</p>
+              <div className="units">
+                {allUnits.map((u) => (
+                  <button
+                    key={u}
+                    className={cart.find((l) => l.key === unitPickerFor)?.unitType === u ? 'on' : ''}
+                    onClick={() => {
+                      setCart((prev) => prev.map((x) => (x.key === unitPickerFor ? { ...x, unitType: u } : x)))
+                      setUnitPickerFor(null)
+                    }}
+                  >
+                    {u}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

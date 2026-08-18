@@ -11,6 +11,7 @@ import {
 } from '../db'
 import { money, dateKeyMonrovia, isLowStock, selectOnFocus, variantDisplayLabel } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
+import { fillCatalogPrices } from '../lib/catalogPriceFill'
 import { format, subDays } from 'date-fns'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -352,6 +353,23 @@ function SetupSheet({ onClose }: { onClose: () => void }) {
               <input className="in" placeholder="New category name" value={newCategory} onChange={(e) => setNewCategory(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addCategory()} />
               <button className="btn" style={{ width: 'auto', padding: '0 16px' }} onClick={addCategory}>Add</button>
             </div>
+          </div>
+
+          <div className="fld">
+            <label className="lab">Catalog price fill</label>
+            <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', margin: '0 0 8px', lineHeight: 1.5 }}>
+              One-time fill for cost/selling prices on ~127 hardware-store items (matched by exact name; never
+              overwrites a price you've already entered — mattresses are skipped, fill those by hand in Stock).
+            </p>
+            <button
+              className="btn amber"
+              onClick={async () => {
+                const result = await fillCatalogPrices()
+                setStatus(`Filled ${result.filled}, created ${result.created}, ${result.alreadyHadValues} already had prices.`)
+              }}
+            >
+              Fill catalog prices
+            </button>
           </div>
 
           <div className="fld">

@@ -1,10 +1,34 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, DRAWER_OUT_KINDS, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type DrawerOut, type Currency } from '../db'
 import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
 import { lrdAmountOf, usdAmountOf, withoutVoided } from '../lib/salesLedger'
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+// Any file type is accepted (not just images), so this can't always lean on
+// ItemThumb's image-only rendering -- shows a real preview for images, a
+// plain file-type badge for anything else (e.g. a scanned PDF).
+function AttachmentThumb({ file }: { file: Blob & { name?: string } }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const isImage = file.type?.startsWith('image/')
+
+  useEffect(() => {
+    if (!isImage) return
+    const objectUrl = URL.createObjectURL(file)
+    setUrl(objectUrl)
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [file, isImage])
+
+  if (isImage && url) {
+    return <img src={url} alt="" style={{ width: 64, height: 64, borderRadius: 12, objectFit: 'cover', border: '1px solid var(--cl-line)' }} />
+  }
+  return (
+    <div style={{ width: 64, height: 64, borderRadius: 12, border: '1px solid var(--cl-line)', background: 'var(--cl-line-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: 'var(--cl-ink-3)', textAlign: 'center', padding: 4 }}>
+    file
+    </div>
+  )
+}
 
 // One record per calendar day, edited in place (every field autosaves) --
 // exactly the reference's `cash[date]` model. Sold vs cash-in up top (with
@@ -235,6 +259,41 @@ export default function Drawer() {
                 </span>
               </div>
             </div>
+          </div>
+
+          <p className="eb">Attach a photo<span className="n"> — when there's only time for the total, not every line</span></p>
+          <div className="card">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {(rec?.attachments ?? []).map((file, i) => (
+                <div key={i} style={{ position: 'relative' }}>
+                  <AttachmentThumb file={file} />
+                  <button
+                    onClick={() => upsert({ attachments: (rec?.attachments ?? []).filter((_, j) => j !== i) })}
+                    aria-label="Remove attachment"
+                    style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: '50%', background: 'var(--cl-ink)', color: 'var(--cl-bg)', fontSize: 11, lineHeight: '20px' }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              <label style={{ width: 64, height: 64, borderRadius: 12, border: '2px dashed var(--cl-line)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--cl-ink-3)', cursor: 'pointer', fontSize: 10, fontWeight: 700 }}>
+                +<span>Add</span>
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? [])
+                    if (files.length) upsert({ attachments: [...(rec?.attachments ?? []), ...files] })
+                    e.target.value = ''
+                  }}
+                />
+              </label>
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', margin: '9px 0 0', lineHeight: 1.5 }}>
+              Photos or PDFs, any number -- kept as backup for this day, separate from the numbers above.
+            </p>
           </div>
 
           <button
