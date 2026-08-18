@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
+import { Link } from 'react-router-dom'
 import {
   db,
   profitOf,
@@ -7,366 +8,163 @@ import {
   DEFAULT_EXCHANGE_RATE,
   BRANCHES_KEY,
   DEFAULT_BRANCHES,
-  type Currency,
 } from '../db'
-import { Card, Badge, BottomSheet, Field, Button, inputClass } from '../components/ui'
-import { AlertIcon, SettingsIcon, PlusIcon, TrashIcon } from '../components/icons'
-import { money, dateKeyMonrovia, isLowStock, selectOnFocus } from '../lib/format'
-import { lrdAmountOf, usdAmountOf, withoutVoided } from '../lib/salesLedger'
-import { Link } from 'react-router-dom'
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-} from 'recharts'
-import { format, subDays, startOfWeek, startOfMonth } from 'date-fns'
-
-type DateFilter = 'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'custom'
-
-const DATE_FILTERS: { value: DateFilter; label: string }[] = [
-  { value: 'today', label: 'Today' },
-  { value: 'yesterday', label: 'Yesterday' },
-  { value: 'thisWeek', label: 'This Week' },
-  { value: 'thisMonth', label: 'This Month' },
-  { value: 'custom', label: 'Custom Range' },
-]
+import { money, dateKeyMonrovia, isLowStock, selectOnFocus, variantDisplayLabel } from '../lib/format'
+import { withoutVoided } from '../lib/salesLedger'
+import { format, subDays } from 'date-fns'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-// Liberia is UTC+0 year-round, so a Monrovia calendar day's midnight is
-// exactly UTC midnight for that date string -- this stays correct
-// regardless of which timezone the device itself is set to.
 function monroviaDayStart(ts: number): number {
   return new Date(`${dateKeyMonrovia(ts)}T00:00:00Z`).getTime()
 }
 
-function rangeFor(filter: DateFilter, customStart: string, customEnd: string): { start: number; end: number; label: string } {
-  const now = Date.now()
-  const todayStart = monroviaDayStart(now)
-  const todayEnd = todayStart + DAY_MS - 1
-
-  if (filter === 'today') return { start: todayStart, end: todayEnd, label: format(todayStart, 'EEEE, MMM d') }
-  if (filter === 'yesterday') {
-    const y = todayStart - DAY_MS
-    return { start: y, end: y + DAY_MS - 1, label: format(y, 'EEEE, MMM d') }
-  }
-  if (filter === 'thisWeek') {
-    const weekStart = startOfWeek(new Date(todayStart), { weekStartsOn: 1 }).getTime()
-    return { start: weekStart, end: todayEnd, label: `${format(weekStart, 'MMM d')} – ${format(todayStart, 'MMM d')}` }
-  }
-  if (filter === 'thisMonth') {
-    const monthStart = startOfMonth(new Date(todayStart)).getTime()
-    return { start: monthStart, end: todayEnd, label: format(monthStart, 'MMMM yyyy') }
-  }
-  // custom
-  const start = customStart ? monroviaDayStart(new Date(`${customStart}T12:00:00Z`).getTime()) : todayStart
-  const end = customEnd ? monroviaDayStart(new Date(`${customEnd}T12:00:00Z`).getTime()) + DAY_MS - 1 : todayEnd
-  return {
-    start,
-    end,
-    label: customStart && customEnd ? `${format(start, 'MMM d')} – ${format(end, 'MMM d')}` : 'Pick a custom range',
-  }
-}
-
+// KPIs, a 14-day bar chart, best sellers and running-low, matching the
+// reference Numbers screen's layout/classes exactly. The Setup gear
+// absorbed the old standalone Settings tab (exchange rate, categories,
+// backup) plus the new editable/addable Branches list.
 export default function Numbers() {
-  const [filter, setFilter] = useState<DateFilter>('today')
-  const [customRangeOpen, setCustomRangeOpen] = useState(false)
-  const [customStart, setCustomStart] = useState('')
-  const [customEnd, setCustomEnd] = useState('')
-  const [trendCurrency, setTrendCurrency] = useState<Currency>('USD')
   const [setupOpen, setSetupOpen] = useState(false)
+  const todayStart = monroviaDayStart(Date.now())
+  const weekStart = todayStart - 6 * DAY_MS
 
-  const { start, end, label } = useMemo(() => rangeFor(filter, customStart, customEnd), [filter, customStart, customEnd])
+  const allSalesRaw = useLiveQuery(() => db.sales.toArray(), [])
+  const allSales = useMemo(() => withoutVoided(allSalesRaw ?? []), [allSalesRaw])
+  const wk = useMemo(() => allSales.filter((s) => s.timestamp >= weekStart), [allSales, weekStart])
 
-  function selectFilter(value: DateFilter) {
-    setFilter(value)
-    if (value === 'custom') setCustomRangeOpen(true)
-  }
-
-  // Reactive query models -- every widget below recomputes the instant the
-  // date filter (or the underlying data) changes.
-  const salesInRangeRaw = useLiveQuery(() => db.sales.where('timestamp').between(start, end, true, true).toArray(), [start, end])
-  const salesInRange = useMemo(() => withoutVoided(salesInRangeRaw ?? []), [salesInRangeRaw])
-  const drawerCountsInRange = useLiveQuery(
-    () => db.drawerCounts.where('timestamp').between(start, end, true, true).toArray(),
-    [start, end],
-  )
-  // "Physical Drawer Balance" is a running, physically-counted total, not
-  // something that sums across days -- so it's the most recent EOD close
-  // at or before the end of the selected period, not an additive sum.
-  const latestDrawerCount = useLiveQuery(() => db.drawerCounts.where('timestamp').belowOrEqual(end).last(), [end])
+  const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
+  const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
 
   const products = useLiveQuery(() => db.products.toArray(), [])
   const variants = useLiveQuery(() => db.variants.toArray(), [])
+  const productById = useMemo(() => new Map((products ?? []).map((p) => [p.id!, p])), [products])
 
-  const lowStockVariants = useMemo(() => {
-    const productMap = new Map((products ?? []).map((p) => [p.id, p]))
-    return (variants ?? [])
-      .filter((v) => isLowStock(v.stockMyShop, v.lowStockThreshold))
-      .map((v) => ({ ...v, productName: productMap.get(v.productId)?.name ?? 'Unknown item' }))
-  }, [variants, products])
+  const lowStockVariants = useMemo(
+    () =>
+      (variants ?? [])
+        .filter((v) => isLowStock(v.stockMyShop, v.lowStockThreshold))
+        .map((v) => ({ ...v, label: variantDisplayLabel(productById.get(v.productId)?.name ?? 'Unknown item', v.label) }))
+        .sort((a, b) => a.stockMyShop - b.stockMyShop),
+    [variants, productById],
+  )
 
-  // Card 1 — Total Revenue, dual currency.
-  const revenue = useMemo(() => {
-    let lrd = 0
-    let usd = 0
-    for (const s of salesInRange ?? []) {
-      lrd += lrdAmountOf(s)
-      usd += usdAmountOf(s)
-    }
-    return { lrd, usd }
-  }, [salesInRange])
+  const rev = wk.reduce((s, l) => s + l.soldFor + (l.secondaryAmount ?? 0), 0)
+  const profit = wk.reduce((s, l) => s + profitOf(l), 0)
+  const wU = wk.filter((s) => s.currency === 'USD').reduce((s, l) => s + l.soldFor, 0) + wk.reduce((s, l) => s + (l.secondaryCurrency === 'USD' ? l.secondaryAmount ?? 0 : 0), 0)
+  const wL = wk.filter((s) => s.currency === 'LRD').reduce((s, l) => s + l.soldFor, 0) + wk.reduce((s, l) => s + (l.secondaryCurrency === 'LRD' ? l.secondaryAmount ?? 0 : 0), 0)
+  const owedTbs = allSales.filter((s) => s.tbs && !s.pickedUp).length
 
-  // Net Profit — revenue minus each line's frozen cost-at-sale (the variant
-  // Cost Price at the moment it was sold), feeding the top-right indicator.
-  const netProfit = useMemo(() => {
-    let lrd = 0
-    let usd = 0
-    for (const s of salesInRange ?? []) {
-      const p = profitOf(s)
-      if (s.currency === 'LRD') lrd += p
-      else usd += p
-    }
-    return { lrd, usd }
-  }, [salesInRange])
+  const cashOutWk = useLiveQuery(async () => {
+    const rows = await db.drawerCounts.where('timestamp').aboveOrEqual(weekStart).toArray()
+    return rows.reduce((sum, r) => sum + (r.outs ?? []).reduce((s, o) => s + o.amt / (o.cur === 'LRD' ? rate : 1), 0), 0)
+  }, [weekStart, rate]) ?? 0
 
-  // Card 2 — Hand Cash Log: the subset of revenue explicitly counted as
-  // physical cash-in-hand (the EOD drawer-count entries logged for this
-  // period), as opposed to revenue still sitting as an uncollected TBS balance.
-  const handCash = useMemo(() => {
-    let lrd = 0
-    let usd = 0
-    for (const d of drawerCountsInRange ?? []) {
-      lrd += d.lrdActual
-      usd += d.usdActual
-    }
-    return { lrd, usd }
-  }, [drawerCountsInRange])
-
-  // Card 3 — Physical Drawer Balance: latest counted balance carried forward.
-  const drawerBalance = { lrd: latestDrawerCount?.lrdActual ?? 0, usd: latestDrawerCount?.usdActual ?? 0 }
-
-  // Card 4 — Customer Traffic Counter: distinct customer tickets in range.
-  const customerCount = useMemo(() => new Set((salesInRange ?? []).map((s) => s.customerNumber)).size, [salesInRange])
-
-  const trend = useLiveQuery(async () => {
-    const from = monroviaDayStart(subDays(Date.now(), 13).getTime())
-    const rows = withoutVoided(await db.sales.where('timestamp').aboveOrEqual(from).toArray())
-    const byDay = new Map<string, number>()
+  const days = useMemo(() => {
+    const out: { key: string; label: string; rev: number }[] = []
     for (let i = 13; i >= 0; i--) {
-      const key = format(subDays(Date.now(), i), 'MMM d')
-      byDay.set(key, 0)
+      const ts = Date.now() - i * DAY_MS
+      const key = dateKeyMonrovia(ts)
+      const dayRev = allSales.filter((s) => dateKeyMonrovia(s.timestamp) === key).reduce((s, l) => s + l.soldFor + (l.secondaryAmount ?? 0), 0)
+      out.push({ key, label: format(subDays(Date.now(), i), 'd'), rev: dayRev })
     }
-    for (const s of rows) {
-      if (s.currency !== trendCurrency) continue
-      const key = format(s.timestamp, 'MMM d')
-      if (byDay.has(key)) byDay.set(key, (byDay.get(key) ?? 0) + s.soldFor)
+    return out
+  }, [allSales])
+  const maxDay = Math.max(...days.map((d) => d.rev), 1)
+  const todayKey = dateKeyMonrovia(Date.now())
+
+  const topItems = useMemo(() => {
+    const m = new Map<string, { qty: number; rev: number }>()
+    for (const s of wk) {
+      const e = m.get(s.itemName) ?? { qty: 0, rev: 0 }
+      e.qty += s.qty
+      e.rev += s.soldFor + (s.secondaryAmount ?? 0)
+      m.set(s.itemName, e)
     }
-    return Array.from(byDay.entries()).map(([date, total]) => ({ date, total }))
-  }, [trendCurrency])
+    return Array.from(m.entries()).sort((a, b) => b[1].rev - a[1].rev).slice(0, 5)
+  }, [wk])
 
   return (
-    <div className="flex flex-col gap-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-      {/* Sticky Shopify-style global date filter */}
-      <div className="sticky top-0 z-10 -mx-4 bg-[var(--page-plane)] px-4 pb-3 pt-1 md:-mx-8 md:px-8">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-xl font-semibold text-[var(--text-primary)]">Numbers</h1>
-            <p className="truncate text-sm text-[var(--text-secondary)]">{label}</p>
+    <div className="cl flex min-h-[calc(100dvh-6rem)] flex-col md:min-h-[calc(100dvh-2rem)]">
+      <div className="hd">
+        <div>
+          <h1>Numbers</h1>
+          <div className="sub">Last 7 days</div>
+        </div>
+        <button className="btn-s" onClick={() => setSetupOpen(true)}>⚙ Setup</button>
+      </div>
+
+      <div className="body">
+        <div className="pad">
+          <div className="g2" style={{ marginTop: 4 }}>
+            <div className="kpi">
+              <span className="k">Sold</span>
+              <span className="v m">{money(rev, 'USD')}</span>
+              <span className="s">{wk.length} sales</span>
+            </div>
+            <div className="kpi a">
+              <span className="k">Gross profit</span>
+              <span className="v m">{money(profit, 'USD')}</span>
+              <span className="s">{rev ? Math.round((profit / rev) * 100) : 0}% margin</span>
+            </div>
           </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <div className="text-right">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Net Profit</div>
-              <div className="tabular text-sm font-bold" style={{ color: '#1a7f37' }}>
-                {money(netProfit.usd, 'USD')} + {money(netProfit.lrd, 'LRD')}
+          <div className="g2">
+            <div className={`kpi${owedTbs > 0 ? ' r' : ''}`}>
+              <span className="k">Owed to you</span>
+              <span className="v m">{owedTbs}</span>
+              <span className="s">item{owedTbs === 1 ? '' : 's'} to supply</span>
+            </div>
+            <div className="kpi">
+              <span className="k">Given out / taken</span>
+              <span className="v m">{money(cashOutWk, 'USD')}</span>
+              <span className="s">from the drawer</span>
+            </div>
+          </div>
+
+          <p className="eb">Last 14 days</p>
+          <div className="chart">
+            {days.map((dd) => (
+              <div key={dd.key} className={`b${dd.key === todayKey ? ' on' : ''}`} style={{ height: `${Math.max(3, (dd.rev / maxDay) * 100)}%` }} title={`${dd.key} ${money(dd.rev, 'USD')}`} />
+            ))}
+          </div>
+          <div className="xax">
+            {days.map((dd, i) => <span key={dd.key}>{i % 2 === 0 ? dd.label : ''}</span>)}
+          </div>
+          <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', marginTop: 7 }}>Best day {money(maxDay, 'USD')}</p>
+
+          <p className="eb">How they paid</p>
+          <div className="card">
+            <div style={{ height: 12, display: 'flex', borderRadius: 99, overflow: 'hidden', background: 'var(--cl-line)', marginBottom: 10 }}>
+              <div style={{ width: `${(wU / ((wU + wL) || 1)) * 100}%`, background: 'var(--cl-usd)' }} />
+              <div style={{ width: `${(wL / ((wU + wL) || 1)) * 100}%`, background: 'var(--cl-lrd)' }} />
+            </div>
+            <div className="st"><span className="k">US dollars</span><span className="v m" style={{ color: 'var(--cl-usd)' }}>{money(wU, 'USD')}</span></div>
+            <div className="st"><span className="k">Liberian dollars</span><span className="v m" style={{ color: 'var(--cl-lrd)' }}>{money(wL, 'LRD')}</span></div>
+          </div>
+
+          <p className="eb">Best sellers</p>
+          <div className="card">
+            {topItems.length ? topItems.map(([name, v]) => (
+              <div className="st" key={name}>
+                <span className="k">{name} <span className="m" style={{ color: 'var(--cl-ink-3)' }}>{v.qty}</span></span>
+                <span className="v m">{money(v.rev, 'USD')}</span>
               </div>
-            </div>
-            <button
-              onClick={() => setSetupOpen(true)}
-              aria-label="Setup"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-1)] text-[var(--text-secondary)]"
-            >
-              <SettingsIcon className="h-4 w-4" />
-            </button>
+            )) : <p style={{ fontSize: 12.5, color: 'var(--cl-ink-3)', margin: 0 }}>No sales this week yet.</p>}
           </div>
-        </div>
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-          {DATE_FILTERS.map((f) => (
-            <button
-              key={f.value}
-              onClick={() => selectFilter(f.value)}
-              className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
-                filter === f.value
-                  ? 'border-[var(--series-1)] bg-[var(--series-1)] text-white'
-                  : 'border-[var(--border)] bg-[var(--surface-1)] text-[var(--text-secondary)]'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
 
-      {/* Core metric summary cards -- dual currency, responsive, never overflowing off-screen */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Card className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Total Revenue</div>
-          <div className="mt-2 flex flex-col gap-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-[var(--text-secondary)]">LRD</span>
-              <span className="tabular truncate text-lg font-bold text-[var(--text-primary)]">{money(revenue.lrd, 'LRD')}</span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-[var(--text-secondary)]">USD</span>
-              <span className="tabular truncate text-lg font-bold text-[var(--text-primary)]">{money(revenue.usd, 'USD')}</span>
-            </div>
+          <p className="eb">Running low<span className="n"> — buy more of these</span></p>
+          <div className="card">
+            {lowStockVariants.length ? lowStockVariants.slice(0, 12).map((v) => (
+              <div className="st" key={v.id}>
+                <span className="k">{v.label}</span>
+                <span className="v m" style={{ color: 'var(--cl-alarm)' }}>{v.stockMyShop} left</span>
+              </div>
+            )) : <p style={{ fontSize: 12.5, color: 'var(--cl-ink-3)', margin: 0 }}>Nothing is low — everything is stocked.</p>}
           </div>
-        </Card>
-
-        <Card className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Hand Cash Log</div>
-          <p className="mt-1 text-xs text-[var(--text-muted)]">Revenue explicitly counted as physical cash</p>
-          <div className="mt-2 flex flex-col gap-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-[var(--text-secondary)]">LRD</span>
-              <span className="tabular truncate text-lg font-bold text-[var(--text-primary)]">{money(handCash.lrd, 'LRD')}</span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-[var(--text-secondary)]">USD</span>
-              <span className="tabular truncate text-lg font-bold text-[var(--text-primary)]">{money(handCash.usd, 'USD')}</span>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Physical Drawer Balance</div>
-          <p className="mt-1 text-xs text-[var(--text-muted)]">Most recent counted balance as of this period</p>
-          <div className="mt-2 flex flex-col gap-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-[var(--text-secondary)]">LRD</span>
-              <span className="tabular truncate text-lg font-bold text-[var(--text-primary)]">{money(drawerBalance.lrd, 'LRD')}</span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-[var(--text-secondary)]">USD</span>
-              <span className="tabular truncate text-lg font-bold text-[var(--text-primary)]">{money(drawerBalance.usd, 'USD')}</span>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Customer Traffic</div>
-          <div className="tabular mt-2 text-3xl font-bold text-[var(--text-primary)]">{customerCount}</div>
-          <p className="text-xs text-[var(--text-secondary)]">{customerCount === 1 ? 'unique customer ticket' : 'unique customer tickets'} this period</p>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-[var(--text-primary)]">Sales trend — last 14 days</h2>
-            <div className="flex gap-1 rounded-lg bg-[var(--page-plane)] p-0.5">
-              {(['USD', 'LRD'] as Currency[]).map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setTrendCurrency(c)}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-                    trendCurrency === c ? 'bg-[var(--surface-1)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-muted)]'
-                  }`}
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trend ?? []} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                <CartesianGrid stroke="var(--gridline)" vertical={false} />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
-                  axisLine={{ stroke: 'var(--baseline)' }}
-                  tickLine={false}
-                  interval={2}
-                />
-                <YAxis
-                  tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
-                  axisLine={false}
-                  tickLine={false}
-                  width={40}
-                  tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${v}`)}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: 'var(--surface-1)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
-                  formatter={(v) => [money(Number(v), trendCurrency), 'Sales']}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="total"
-                  stroke="var(--series-1)"
-                  strokeWidth={2}
-                  dot={false}
-                  activeDot={{ r: 4 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <Card>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-[var(--text-primary)]">Low stock alerts</h2>
-            {lowStockVariants.length > 0 && <Badge tone="critical">{lowStockVariants.length}</Badge>}
-          </div>
-          {lowStockVariants.length === 0 ? (
-            <p className="text-sm text-[var(--text-muted)]">Nothing low on stock right now.</p>
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {lowStockVariants.slice(0, 6).map((v) => (
-                <li key={v.id} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="flex items-center gap-1.5 truncate">
-                    <AlertIcon className="h-3.5 w-3.5 shrink-0 text-[var(--status-critical)]" />
-                    <span className="truncate">
-                      {v.productName}
-                      {v.label && v.label !== 'Standard' ? ` — ${v.label}` : ''}
-                    </span>
-                  </span>
-                  <span className="tabular shrink-0 text-[var(--status-critical)]">{v.stockMyShop} left</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <Link to="/inventory" className="mt-3 inline-block text-xs font-medium text-[var(--series-1)]">
-            View inventory →
+          <Link to="/inventory" className="m" style={{ display: 'inline-block', marginTop: 4, fontSize: 11, fontWeight: 700, color: 'var(--cl-amber-2)' }}>
+            View Stock →
           </Link>
-        </Card>
-      </div>
-
-      <BottomSheet open={customRangeOpen} onClose={() => setCustomRangeOpen(false)}>
-        <div className="flex flex-col gap-3 pt-2">
-          <h2 className="text-base font-semibold text-[var(--text-primary)]">Custom Date Range</h2>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Start">
-              <input type="date" className={inputClass} value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
-            </Field>
-            <Field label="End">
-              <input type="date" className={inputClass} value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
-            </Field>
-          </div>
-          <Button onClick={() => setCustomRangeOpen(false)} disabled={!customStart || !customEnd}>
-            Apply range
-          </Button>
         </div>
-      </BottomSheet>
+      </div>
 
       {setupOpen && <SetupSheet onClose={() => setSetupOpen(false)} />}
     </div>
@@ -403,23 +201,19 @@ function SetupSheet({ onClose }: { onClose: () => void }) {
     const num = Number(value)
     if (num > 0) await db.settings.put({ key: EXCHANGE_RATE_KEY, value: String(num) })
   }
-
   async function saveBranches(next: string[]) {
     await db.settings.put({ key: BRANCHES_KEY, value: JSON.stringify(next) })
   }
-
   function addBranch() {
     const name = newBranch.trim()
     if (!name || branches.includes(name)) return
     saveBranches([...branches, name])
     setNewBranch('')
   }
-
   function removeBranch(name: string) {
     if (branches.length <= 1) return
     saveBranches(branches.filter((b) => b !== name))
   }
-
   async function addCategory() {
     const name = newCategory.trim()
     if (!name) return
@@ -427,7 +221,6 @@ function SetupSheet({ onClose }: { onClose: () => void }) {
     if (!exists) await db.categories.add({ name })
     setNewCategory('')
   }
-
   async function removeCategory(id: number) {
     await db.categories.delete(id)
   }
@@ -446,15 +239,8 @@ function SetupSheet({ onClose }: { onClose: () => void }) {
     ])
     const payload = {
       exportedAt: new Date().toISOString(),
-      products,
-      variants,
-      sales,
-      categories: cats,
-      stockTransfers: transfers,
-      drawerCounts,
-      warehouseLedger,
-      abbreviations,
-      customUnits,
+      products, variants, sales, categories: cats, stockTransfers: transfers,
+      drawerCounts, warehouseLedger, abbreviations, customUnits,
     }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -522,105 +308,76 @@ function SetupSheet({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <BottomSheet open onClose={onClose}>
-      <div className="flex flex-col gap-4 pt-2">
-        <h2 className="text-base font-semibold text-[var(--text-primary)]">Setup</h2>
+    <div className="sheet" onClick={onClose}>
+      <div className="sbox" onClick={(e) => e.stopPropagation()}>
+        <div className="grab" />
+        <div className="scroll" style={{ paddingBottom: 16 }}>
+          <p className="eb">Setup</p>
 
-        <div>
-          <Field label="Exchange rate (L$ per $1)">
-            <input
-              type="number"
-              min={1}
-              step="1"
-              className={inputClass + ' w-40'}
-              value={rateValue}
-              onFocus={selectOnFocus}
-              onChange={(e) => saveRate(e.target.value)}
-            />
-          </Field>
-        </div>
+          <div className="fld">
+            <label className="lab">Liberian dollars per US$1</label>
+            <input className="in m" inputMode="decimal" value={rateValue} onFocus={selectOnFocus} onChange={(e) => saveRate(e.target.value)} />
+          </div>
 
-        <div>
-          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Branches</div>
-          <div className="mb-2 flex flex-wrap gap-2">
-            {branches.map((b) => (
-              <span key={b} className="inline-flex items-center gap-1.5 rounded-full bg-[var(--page-plane)] px-3 py-1 text-xs font-medium">
-                {b}
-                {branches.length > 1 && (
-                  <button onClick={() => removeBranch(b)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Remove branch">
-                    <TrashIcon className="h-3 w-3" />
-                  </button>
-                )}
-              </span>
-            ))}
+          <div className="fld">
+            <label className="lab">Branches</label>
+            <div className="units" style={{ marginBottom: 8 }}>
+              {branches.map((b) => (
+                <span key={b} className="on" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--cl-ink)', background: 'var(--cl-ink)', color: 'var(--cl-bg)', borderRadius: 8, padding: '7px 11px', font: '700 12px Archivo' }}>
+                  {b}
+                  {branches.length > 1 && (
+                    <button onClick={() => removeBranch(b)} aria-label="Remove branch" style={{ color: 'var(--cl-bg)', opacity: 0.7 }}>✕</button>
+                  )}
+                </span>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input className="in" placeholder="New branch name" value={newBranch} onChange={(e) => setNewBranch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addBranch()} />
+              <button className="btn" style={{ width: 'auto', padding: '0 16px' }} onClick={addBranch}>Add</button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <input
-              className={inputClass}
-              placeholder="New branch name"
-              value={newBranch}
-              onChange={(e) => setNewBranch(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addBranch()}
-            />
-            <Button onClick={addBranch}>
-              <PlusIcon className="h-4 w-4" />
-              Add
-            </Button>
-          </div>
-        </div>
 
-        <div>
-          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Categories</div>
-          <div className="mb-2 flex flex-wrap gap-2">
-            {(categories ?? []).map((c) => (
-              <span key={c.id} className="inline-flex items-center gap-1.5 rounded-full bg-[var(--page-plane)] px-3 py-1 text-xs font-medium">
-                {c.name}
-                <button onClick={() => c.id && removeCategory(c.id)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Remove">
-                  <TrashIcon className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-            {(categories ?? []).length === 0 && (
-              <p className="text-sm text-[var(--text-muted)]">No custom categories yet.</p>
-            )}
+          <div className="fld">
+            <label className="lab">Categories</label>
+            <div className="units" style={{ marginBottom: 8 }}>
+              {(categories ?? []).map((c) => (
+                <span key={c.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--cl-line)', background: 'var(--cl-card)', color: 'var(--cl-ink-2)', borderRadius: 8, padding: '7px 11px', font: '700 12px Archivo' }}>
+                  {c.name}
+                  <button onClick={() => c.id && removeCategory(c.id)} aria-label="Remove category" style={{ color: 'var(--cl-ink-3)' }}>✕</button>
+                </span>
+              ))}
+              {(categories ?? []).length === 0 && <p style={{ fontSize: 12.5, color: 'var(--cl-ink-3)', margin: 0 }}>No custom categories yet.</p>}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input className="in" placeholder="New category name" value={newCategory} onChange={(e) => setNewCategory(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addCategory()} />
+              <button className="btn" style={{ width: 'auto', padding: '0 16px' }} onClick={addCategory}>Add</button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <input
-              className={inputClass}
-              placeholder="New category name"
-              value={newCategory}
-              onChange={(e) => setNewCategory(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addCategory()}
-            />
-            <Button onClick={addCategory}>
-              <PlusIcon className="h-4 w-4" />
-              Add
-            </Button>
+
+          <div className="fld">
+            <label className="lab">Backup</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn" style={{ width: 'auto', padding: '0 16px', height: 42 }} onClick={exportBackup}>Export backup</button>
+              <button className="btn ghost" style={{ width: 'auto', padding: '0 16px', height: 42 }} onClick={() => fileInputRef.current?.click()}>Import backup</button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) importBackup(file)
+                  e.target.value = ''
+                }}
+              />
+            </div>
+            {status && <p style={{ marginTop: 8, fontSize: 11, color: 'var(--cl-ink-3)' }}>{status}</p>}
           </div>
         </div>
-
-        <div>
-          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Backup</div>
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={exportBackup}>Export backup (.json)</Button>
-            <Button variant="secondary" onClick={() => fileInputRef.current?.click()}>
-              Import backup
-            </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/json"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) importBackup(file)
-                e.target.value = ''
-              }}
-            />
-          </div>
-          {status && <p className="mt-2 text-xs text-[var(--text-muted)]">{status}</p>}
+        <div className="foot">
+          <button className="btn ghost" onClick={onClose}>Done</button>
         </div>
       </div>
-    </BottomSheet>
+    </div>
   )
 }

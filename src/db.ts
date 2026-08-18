@@ -115,17 +115,39 @@ export interface Setting {
   value: string
 }
 
+// One itemized "money out of the drawer" line -- who/what it was for, what
+// kind of outflow (lend/personal/sent to another location/expense/etc.),
+// and how much in which currency.
+export interface DrawerOut {
+  id: string
+  name: string
+  kind: string
+  cur: Currency
+  amt: number
+}
+
+export const DRAWER_OUT_KINDS = ['Lend', 'Taken home', 'Sent to brother', 'Expense', 'Gave out']
+
 export interface DrawerCount {
   id?: number
   timestamp: number
   usdActual: number
   lrdActual: number
   note?: string
-  // End-of-day balancing widget (Sales tab): money paid out of the drawer
-  // that day (e.g. sent to Vishal, personal draws) -- absent for older
-  // counts logged before this existed, or ones logged without an EOD close.
+  // End-of-day balancing widget: money paid out of the drawer that day --
+  // outboundUsd/outboundLrd are the legacy flat totals (still written for
+  // older callers), outs is the itemized breakdown the Drawer tab actually
+  // edits; when present it's the source of truth and outboundUsd/Lrd are
+  // just its sum, kept in sync for anything still reading the old fields.
   outboundUsd?: number
   outboundLrd?: number
+  outs?: DrawerOut[]
+  // Editable override for "what the drawer opened with" -- defaults to the
+  // previous day's counted total when absent, but can be typed over if the
+  // drawer actually started different.
+  openUsdOverride?: number
+  openLrdOverride?: number
+  closed?: boolean
 }
 
 export type WarehouseLedgerDirection = 'in' | 'out' // in = received from source; out = sent to source

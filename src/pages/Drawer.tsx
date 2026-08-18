@@ -1,167 +1,283 @@
 import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, profitOf } from '../db'
-import { ShopifyShell, shopifyInputClass, shopifyCardClass } from '../components/ShopifyShell'
-import { Field } from '../components/ui'
-import { money, dateKeyMonrovia, formatDateMonrovia, selectOnFocus } from '../lib/format'
+import { db, DRAWER_OUT_KINDS, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type DrawerOut, type Currency } from '../db'
+import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
 import { lrdAmountOf, usdAmountOf, withoutVoided } from '../lib/salesLedger'
 
-// The counter's own cash-drawer close-out: today's ledger sales vs what's
-// actually in the drawer, opening balance carried from last night's count,
-// money that went out, and the final hand-cash figure. Split out of Book
-// into its own tab -- Book is "what did we sell", Drawer is "what's
-// physically in the till right now".
+const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+// One record per calendar day, edited in place (every field autosaves) --
+// exactly the reference's `cash[date]` model. Sold vs cash-in up top (with
+// a note explaining the gap when balances are owed), opening balance
+// carried from the previous day's count but overridable, itemized money
+// out with a per-kind subtotal, counted vs expected vs difference, and a
+// close/reopen toggle.
 export default function Drawer() {
+  const [d, setD] = useState(() => dateKeyMonrovia(Date.now()))
+  const [pickerOpen, setPickerOpen] = useState(false)
   const todayKey = dateKeyMonrovia(Date.now())
-  const allSalesRaw = useLiveQuery(() => db.sales.orderBy('timestamp').reverse().toArray(), [])
-  const allSales = useMemo(() => withoutVoided(allSalesRaw ?? []), [allSalesRaw])
-  const todaySales = useMemo(() => allSales.filter((s) => dateKeyMonrovia(s.timestamp) === todayKey), [allSales, todayKey])
 
-  const ledgerSumUsd = useMemo(() => todaySales.reduce((s, l) => s + usdAmountOf(l), 0), [todaySales])
-  const ledgerSumLrd = useMemo(() => todaySales.reduce((s, l) => s + lrdAmountOf(l), 0), [todaySales])
-
-  // Net profit is an aggregate summary only — the underlying per-item cost
-  // price itself is never shown on any individual daybook row.
-  const netProfitUsd = useMemo(
-    () => todaySales.filter((s) => s.currency === 'USD').reduce((s, l) => s + profitOf(l), 0),
-    [todaySales],
-  )
-  const netProfitLrd = useMemo(
-    () => todaySales.filter((s) => s.currency === 'LRD').reduce((s, l) => s + profitOf(l), 0),
-    [todaySales],
+  const records = useLiveQuery(() => db.drawerCounts.orderBy('timestamp').toArray(), []) ?? []
+  const rec = useMemo(() => records.find((r) => dateKeyMonrovia(r.timestamp) === d) ?? null, [records, d])
+  const prevRec = useMemo(
+    () => records.filter((r) => dateKeyMonrovia(r.timestamp) < d).sort((a, b) => b.timestamp - a.timestamp)[0] ?? null,
+    [records, d],
   )
 
-  const drawerCounts = useLiveQuery(() => db.drawerCounts.orderBy('timestamp').reverse().toArray(), [])
-  const yesterdayClose = useMemo(() => (drawerCounts ?? []).find((d) => dateKeyMonrovia(d.timestamp) !== todayKey), [drawerCounts, todayKey])
+  const salesRaw = useLiveQuery(() => db.sales.orderBy('timestamp').toArray(), []) ?? []
+  const daySales = useMemo(
+    () => withoutVoided(salesRaw).filter((s) => dateKeyMonrovia(s.timestamp) === d),
+    [salesRaw, d],
+  )
+  const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
+  const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
 
-  const [drawerUsd, setDrawerUsd] = useState('')
-  const [drawerLrd, setDrawerLrd] = useState('')
-  const [outboundUsd, setOutboundUsd] = useState('')
-  const [outboundLrd, setOutboundLrd] = useState('')
-  const [eodNote, setEodNote] = useState('')
+  const sold = daySales.reduce((s, l) => s + l.soldFor + (l.secondaryAmount ?? 0), 0)
+  const inU = daySales.reduce((s, l) => s + usdAmountOf(l), 0)
+  const inL = daySales.reduce((s, l) => s + lrdAmountOf(l), 0)
+  const soldButNotCash = sold - (inU + inL / rate)
 
-  const finalHandCashUsd = (yesterdayClose?.usdActual ?? 0) + ledgerSumUsd - (Number(outboundUsd) || 0)
-  const finalHandCashLrd = (yesterdayClose?.lrdActual ?? 0) + ledgerSumLrd - (Number(outboundLrd) || 0)
+  const outs = rec?.outs ?? []
+  const outU = outs.filter((o) => o.cur === 'USD').reduce((s, o) => s + o.amt, 0)
+  const outL = outs.filter((o) => o.cur === 'LRD').reduce((s, o) => s + o.amt, 0)
 
-  async function logDayEndCount() {
-    await db.drawerCounts.add({
-      timestamp: Date.now(),
-      usdActual: Number(drawerUsd) || 0,
-      lrdActual: Number(drawerLrd) || 0,
-      outboundUsd: Number(outboundUsd) || 0,
-      outboundLrd: Number(outboundLrd) || 0,
-      note: eodNote.trim() || undefined,
-    })
-    setDrawerUsd('')
-    setDrawerLrd('')
-    setOutboundUsd('')
-    setOutboundLrd('')
-    setEodNote('')
+  const openU = rec?.openUsdOverride ?? prevRec?.usdActual ?? 0
+  const openL = rec?.openLrdOverride ?? prevRec?.lrdActual ?? 0
+  const expU = openU + inU - outU
+  const expL = openL + inL - outL
+  const gotU = rec ? rec.usdActual : null
+  const gotL = rec ? rec.lrdActual : null
+  const diff = gotU === null ? null : (gotU - expU) + ((gotL ?? 0) - expL) / rate
+
+  async function upsert(patch: Partial<Omit<import('../db').DrawerCount, 'id'>>) {
+    if (rec?.id) {
+      await db.drawerCounts.update(rec.id, patch)
+    } else {
+      await db.drawerCounts.add({
+        timestamp: new Date(`${d}T12:00:00`).getTime(),
+        usdActual: 0,
+        lrdActual: 0,
+        outs: [],
+        ...patch,
+      })
+    }
+  }
+
+  function addOut() {
+    upsert({ outs: [...outs, { id: uid(), name: '', amt: 0, cur: 'USD', kind: DRAWER_OUT_KINDS[0] }] })
+  }
+  function updateOut(id: string, patch: Partial<DrawerOut>) {
+    upsert({ outs: outs.map((o) => (o.id === id ? { ...o, ...patch } : o)) })
+  }
+  function removeOut(id: string) {
+    upsert({ outs: outs.filter((o) => o.id !== id) })
   }
 
   return (
-    <ShopifyShell title="Drawer">
-      <div className="flex flex-col gap-4">
-        <div className="px-1 text-xs font-semibold [color:var(--cl-ink-2)]">{formatDateMonrovia(Date.now())} — today</div>
+    <div className="cl flex min-h-[calc(100dvh-6rem)] flex-col md:min-h-[calc(100dvh-2rem)]">
+      <div className="hd">
+        <div>
+          <h1>Drawer</h1>
+          <div className="sub">{d === todayKey ? 'Today' : formatShortDateMonrovia(new Date(`${d}T12:00:00`).getTime())}</div>
+        </div>
+        <button className="btn-s" onClick={() => setPickerOpen(true)}>{d}</button>
+      </div>
 
-        <div className={shopifyCardClass}>
-          <h2 className="mb-3 text-sm font-semibold [color:var(--cl-ink)]">Sold vs cash in</h2>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-            <div className="[color:var(--cl-ink-2)]">Ledger sales — USD</div>
-            <div className="tabular text-right font-semibold [color:var(--cl-ink)]">{money(ledgerSumUsd, 'USD')}</div>
-            <div className="[color:var(--cl-ink-2)]">Ledger sales — LRD</div>
-            <div className="tabular text-right font-semibold [color:var(--cl-ink)]">{money(ledgerSumLrd, 'LRD')}</div>
+      <div className="body">
+        <div className="pad">
+          <div className="g2" style={{ marginTop: 4 }}>
+            <div className="kpi">
+              <span className="k">Sold today</span>
+              <span className="v m">{money(sold, 'USD')}</span>
+              <span className="s">{daySales.length} sale{daySales.length === 1 ? '' : 's'}</span>
+            </div>
+            <div className="kpi a">
+              <span className="k">Cash came in</span>
+              <span className="v m">{money(inU + inL / rate, 'USD')}</span>
+              <span className="s m">{money(inU, 'USD')} + {money(inL, 'LRD')}</span>
+            </div>
           </div>
 
-          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t [border-color:var(--cl-line)] pt-2 text-sm">
-            <div className="[color:var(--cl-ink-2)]">Net profit — USD</div>
-            <div className="tabular text-right font-semibold" style={{ color: 'var(--cl-usd)' }}>{money(netProfitUsd, 'USD')}</div>
-            <div className="[color:var(--cl-ink-2)]">Net profit — LRD</div>
-            <div className="tabular text-right font-semibold" style={{ color: 'var(--cl-usd)' }}>{money(netProfitLrd, 'LRD')}</div>
+          {soldButNotCash > 0.005 && (
+            <div className="warn" style={{ marginBottom: 12 }}>
+              <span>⚠</span>
+              <span>{money(soldButNotCash, 'USD')} of today's sales is still owed — that's the gap between sold and cash.</span>
+            </div>
+          )}
+
+          <p className="eb">Carried from yesterday</p>
+          <div className="card">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
+              <div>
+                <label className="lab">USD</label>
+                <input
+                  className="in m"
+                  inputMode="decimal"
+                  value={rec?.openUsdOverride ?? ''}
+                  placeholder={String(openU)}
+                  onChange={(e) => upsert({ openUsdOverride: e.target.value === '' ? undefined : Number(e.target.value) || 0 })}
+                />
+              </div>
+              <div>
+                <label className="lab">LRD</label>
+                <input
+                  className="in m"
+                  inputMode="decimal"
+                  value={rec?.openLrdOverride ?? ''}
+                  placeholder={String(openL)}
+                  onChange={(e) => upsert({ openLrdOverride: e.target.value === '' ? undefined : Number(e.target.value) || 0 })}
+                />
+              </div>
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', margin: '9px 0 0', lineHeight: 1.5 }}>
+              {prevRec ? "Filled in from last night's count. Type over it if the drawer started different." : 'Type what was in the drawer this morning.'}
+            </p>
           </div>
-          <p className="mt-2 text-xs [color:var(--cl-ink-3)]">
-            Sold and cash-in won't always match — a balance still owed on a sale is ledger revenue that hasn't hit the drawer yet.
+
+          <p className="eb">Money that went out</p>
+          {outs.map((o) => (
+            <div className="card" key={o.id} style={{ padding: '11px 12px' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                <input
+                  className="in"
+                  style={{ flex: 1, padding: '9px 11px', fontSize: 14 }}
+                  placeholder="Who / what for"
+                  value={o.name}
+                  onChange={(e) => updateOut(o.id, { name: e.target.value })}
+                />
+                <button className="rm" style={{ fontSize: 16 }} onClick={() => removeOut(o.id)} aria-label="Remove">✕</button>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <select
+                  className="in"
+                  style={{ flex: 1.2, padding: '9px 10px', fontSize: 13 }}
+                  value={o.kind}
+                  onChange={(e) => updateOut(o.id, { kind: e.target.value })}
+                >
+                  {DRAWER_OUT_KINDS.map((k) => <option key={k}>{k}</option>)}
+                </select>
+                <select
+                  className="in"
+                  style={{ width: 80, padding: '9px 8px', fontSize: 13 }}
+                  value={o.cur}
+                  onChange={(e) => updateOut(o.id, { cur: e.target.value as Currency })}
+                >
+                  <option>USD</option>
+                  <option>LRD</option>
+                </select>
+                <input
+                  className="in m"
+                  style={{ width: 90, padding: '9px 10px', fontSize: 15 }}
+                  inputMode="decimal"
+                  placeholder="0"
+                  value={o.amt || ''}
+                  onChange={(e) => updateOut(o.id, { amt: Number(e.target.value) || 0 })}
+                />
+              </div>
+            </div>
+          ))}
+          <button className="btn ghost" onClick={addOut}>+ Add money out</button>
+
+          {(outU > 0 || outL > 0) && (
+            <div className="card" style={{ marginTop: 10 }}>
+              <div className="st">
+                <span className="k">Total out</span>
+                <span className="v m" style={{ color: 'var(--cl-alarm)' }}>−{money(outU + outL / rate, 'USD')}</span>
+              </div>
+              {DRAWER_OUT_KINDS.filter((k) => outs.some((o) => o.kind === k)).map((k) => (
+                <div className="st" key={k}>
+                  <span className="k">{k}</span>
+                  <span className="v m">
+                    {money(outs.filter((o) => o.kind === k).reduce((s, o) => s + o.amt / (o.cur === 'LRD' ? rate : 1), 0), 'USD')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="eb">Count the drawer</p>
+          <div className="card">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
+              <div>
+                <label className="lab">USD counted</label>
+                <input
+                  className="in m"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={rec?.usdActual || ''}
+                  onChange={(e) => upsert({ usdActual: Number(e.target.value) || 0 })}
+                />
+              </div>
+              <div>
+                <label className="lab">LRD counted</label>
+                <input
+                  className="in m"
+                  inputMode="decimal"
+                  placeholder="0"
+                  value={rec?.lrdActual || ''}
+                  onChange={(e) => upsert({ lrdActual: Number(e.target.value) || 0 })}
+                />
+              </div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <div className="st">
+                <span className="k">Should be there</span>
+                <span className="v m">{money(expU, 'USD')} + {money(expL, 'LRD')}</span>
+              </div>
+              <div className="st">
+                <span className="k">Actually there</span>
+                <span className="v m">{gotU === null ? '—' : `${money(gotU, 'USD')} + ${money(gotL ?? 0, 'LRD')}`}</span>
+              </div>
+              <div className="st">
+                <span className="k">Difference</span>
+                <span className="v m" style={{ color: diff === null ? 'var(--cl-ink-3)' : Math.abs(diff) < 0.01 ? 'var(--cl-usd)' : 'var(--cl-alarm)' }}>
+                  {diff === null ? 'count first' : `${diff > 0 ? '+' : ''}${money(diff, 'USD')}`}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            className={`btn ${rec?.closed ? 'ghost' : 'amber'}`}
+            onClick={() => upsert({ closed: !rec?.closed })}
+          >
+            {rec?.closed ? 'Reopen this day' : 'Close the day'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', marginTop: 9, lineHeight: 1.55 }}>
+            Tonight's count becomes tomorrow's opening drawer.
           </p>
         </div>
-
-        <div className={shopifyCardClass}>
-          <h2 className="mb-3 text-sm font-semibold [color:var(--cl-ink)]">Count the drawer</h2>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Drawer cash — USD">
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                className={shopifyInputClass}
-                value={drawerUsd}
-                onFocus={selectOnFocus}
-                onChange={(e) => setDrawerUsd(e.target.value)}
-              />
-            </Field>
-            <Field label="Drawer cash — LRD">
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                className={shopifyInputClass}
-                value={drawerLrd}
-                onFocus={selectOnFocus}
-                onChange={(e) => setDrawerLrd(e.target.value)}
-              />
-            </Field>
-          </div>
-
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <Field label="Money out — USD">
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                className={shopifyInputClass}
-                value={outboundUsd}
-                onFocus={selectOnFocus}
-                onChange={(e) => setOutboundUsd(e.target.value)}
-              />
-            </Field>
-            <Field label="Money out — LRD">
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                className={shopifyInputClass}
-                value={outboundLrd}
-                onFocus={selectOnFocus}
-                onChange={(e) => setOutboundLrd(e.target.value)}
-              />
-            </Field>
-          </div>
-
-          <div className="mt-3 border-t [border-color:var(--cl-line)] pt-3">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-              <div className="[color:var(--cl-ink-2)]">Final hand cash — USD</div>
-              <div className="tabular text-right text-base font-bold [color:var(--cl-ink)]">{money(finalHandCashUsd, 'USD')}</div>
-              <div className="[color:var(--cl-ink-2)]">Final hand cash — LRD</div>
-              <div className="tabular text-right text-base font-bold [color:var(--cl-ink)]">{money(finalHandCashLrd, 'LRD')}</div>
-            </div>
-            {yesterdayClose && (
-              <p className="mt-2 text-xs [color:var(--cl-ink-3)]">
-                Carries forward {money(yesterdayClose.usdActual, 'USD')} + {money(yesterdayClose.lrdActual, 'LRD')} counted on{' '}
-                {formatDateMonrovia(yesterdayClose.timestamp)}.
-              </p>
-            )}
-          </div>
-
-          <input
-            className={shopifyInputClass + ' mt-3'}
-            placeholder="Note (optional)"
-            value={eodNote}
-            onChange={(e) => setEodNote(e.target.value)}
-          />
-          <button onClick={logDayEndCount} className="mt-3 w-full rounded-xl py-2.5 text-sm font-bold uppercase tracking-wide" style={{ background: 'var(--cl-amber)', color: 'var(--cl-ink)' }}>
-            Close the day
-          </button>
-        </div>
       </div>
-    </ShopifyShell>
+
+      {pickerOpen && (
+        <div className="sheet" onClick={() => setPickerOpen(false)}>
+          <div className="sbox" onClick={(e) => e.stopPropagation()}>
+            <div className="grab" />
+            <div className="scroll" style={{ paddingBottom: 16 }}>
+              <p className="eb">Which day?</p>
+              {Array.from({ length: 14 }, (_, i) => dateKeyMonrovia(Date.now() - i * 86400000)).map((key) => (
+                <button
+                  key={key}
+                  className="btn ghost"
+                  style={{
+                    marginBottom: 8,
+                    textAlign: 'left',
+                    letterSpacing: 0,
+                    textTransform: 'none',
+                    fontSize: 14,
+                    borderColor: key === d ? 'var(--cl-amber)' : 'var(--cl-line)',
+                    background: key === d ? '#fffbf0' : 'transparent',
+                  }}
+                  onClick={() => { setD(key); setPickerOpen(false) }}
+                >
+                  {key === todayKey ? 'Today' : formatShortDateMonrovia(new Date(`${key}T12:00:00`).getTime())}
+                  <span className="m" style={{ color: 'var(--cl-ink-3)', fontWeight: 500, marginLeft: 8 }}>{key}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
