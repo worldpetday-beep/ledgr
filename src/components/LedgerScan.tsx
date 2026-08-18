@@ -31,8 +31,8 @@ function mergeTotals(a: DraftTotals, b: DraftTotals): DraftTotals {
 
 function Header({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 px-4 py-3">
-      <button onClick={onBack} aria-label="Back" className="text-black">
+    <div className="flex shrink-0 items-center gap-3 border-b [border-color:var(--cl-line)] px-4 py-3">
+      <button onClick={onBack} aria-label="Back" className="[color:var(--cl-ink)]">
         <ChevronLeftIcon className="h-5 w-5" />
       </button>
       <h1 className="flex-1 truncate text-base font-semibold">{title}</h1>
@@ -227,12 +227,12 @@ export function LedgerScanView({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white text-slate-900">
+    <div className="fixed inset-0 z-50 flex flex-col [background:var(--cl-card)] [color:var(--cl-ink)]">
       {stage !== 'verify' && <Header title="Ledger Scan Correction" onBack={onClose} />}
 
       {stage === 'upload' && (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-          <p className="text-sm text-slate-500">
+          <p className="text-sm [color:var(--cl-ink-2)]">
             Take or choose a clear, well-lit photo of a physical ledger page. Recognition happens fully on this
             device — nothing is uploaded anywhere.
           </p>
@@ -255,8 +255,8 @@ export function LedgerScanView({ onClose }: { onClose: () => void }) {
 
       {stage === 'processing' && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" />
-          <p className="text-sm text-slate-500">{progressLabel}</p>
+          <div className="h-8 w-8 animate-spin rounded-full border-2 [border-color:var(--cl-line)] border-t-slate-900" />
+          <p className="text-sm [color:var(--cl-ink-2)]">{progressLabel}</p>
         </div>
       )}
 

@@ -441,6 +441,12 @@ export const ORDER_NUMBER_BASE = 1000
 export const WAREHOUSE_SOURCES_KEY = 'warehouseSources'
 export const DEFAULT_WAREHOUSE_SOURCES = ['Vishal Store']
 
+// Editable/addable list of counter locations this ledger records sales
+// for -- purely a settings-level list for now (not yet wired onto Sale
+// rows; that's data-model work for the next migration pass).
+export const BRANCHES_KEY = 'branches'
+export const DEFAULT_BRANCHES = ['My Shop']
+
 // Reserves and returns the next order number for a whole invoice (shared by
 // every line item submitted together), starting at ORDER_NUMBER_BASE and
 // never resetting or reusing a number even after deletes.

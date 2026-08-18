@@ -161,7 +161,7 @@ export function FocusedScanVerification({
   if (!current) return null
 
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-white">
+    <div className="fixed inset-0 z-[60] flex flex-col [background:var(--cl-card)]">
       {/* Top split: zoomed crop of the current line, matching how a physical ledger page looks */}
       <div className="relative shrink-0">
         <CropZoom imageUrl={currentImage.url} imageWidth={currentImage.width} imageHeight={currentImage.height} bbox={current.bbox} />
@@ -171,18 +171,18 @@ export function FocusedScanVerification({
       </div>
 
       {/* Bottom split: stepper form with autofocused input + Next Field */}
-      <div className="flex flex-1 flex-col overflow-y-auto rounded-t-2xl border-t border-gray-200 bg-white px-4 pb-4 pt-4 shadow-[0_-4px_16px_rgba(0,0,0,0.06)]">
-        <h2 className="text-base font-semibold text-black">
+      <div className="flex flex-1 flex-col overflow-y-auto rounded-t-2xl border-t [border-color:var(--cl-line)] [background:var(--cl-card)] px-4 pb-4 pt-4 shadow-[0_-4px_16px_rgba(0,0,0,0.06)]">
+        <h2 className="text-base font-semibold [color:var(--cl-ink)]">
           Entry Verification {index + 1} / {flagged.length}
         </h2>
-        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
-          <div className="h-full rounded-full bg-black transition-all" style={{ width: `${((index + 1) / flagged.length) * 100}%` }} />
+        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full [background:var(--cl-line-2)]">
+          <div className="h-full rounded-full [background:var(--cl-ink)] transition-all" style={{ width: `${((index + 1) / flagged.length) * 100}%` }} />
         </div>
 
         <div className="mt-4 flex flex-col gap-1.5">
           {flagged.slice(0, index).map((item, i) => (
-            <div key={i} className="flex items-center justify-between rounded-lg border border-gray-100 px-3 py-2 text-sm">
-              <span className="min-w-0 truncate text-gray-600">
+            <div key={i} className="flex items-center justify-between rounded-lg border [border-color:var(--cl-line)] px-3 py-2 text-sm">
+              <span className="min-w-0 truncate [color:var(--cl-ink-2)]">
                 {item.fieldLabel} — {summarize(item.summaryLabel, 30)}
               </span>
               <span className="shrink-0 text-xs font-semibold text-green-600">Verified</span>
@@ -190,13 +190,13 @@ export function FocusedScanVerification({
           ))}
         </div>
 
-        <div className="mt-4 rounded-xl border border-gray-100 p-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">{current.summaryLabel}</div>
-          <label className="mt-2 flex items-center gap-2 rounded-lg border-2 border-black bg-gray-50 px-3 py-2.5">
-            <span className="shrink-0 text-sm font-bold text-black">{current.fieldLabel}</span>
+        <div className="mt-4 rounded-xl border [border-color:var(--cl-line)] p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">{current.summaryLabel}</div>
+          <label className="mt-2 flex items-center gap-2 rounded-lg border-2 border-black [background:var(--cl-line-2)] px-3 py-2.5">
+            <span className="shrink-0 text-sm font-bold [color:var(--cl-ink)]">{current.fieldLabel}</span>
             <input
               ref={inputRef}
-              className="w-full bg-transparent text-base font-semibold text-black outline-none"
+              className="w-full bg-transparent text-base font-semibold [color:var(--cl-ink)] outline-none"
               type={current.inputType === 'number' ? 'number' : 'text'}
               inputMode={current.inputType === 'number' ? 'decimal' : 'text'}
               step={current.inputType === 'number' ? '0.01' : undefined}
@@ -207,7 +207,7 @@ export function FocusedScanVerification({
           </label>
         </div>
 
-        <button onClick={commitAndAdvance} className="mt-4 w-full rounded-lg bg-black py-3.5 text-base font-bold text-white">
+        <button onClick={commitAndAdvance} className="mt-4 w-full rounded-lg [background:var(--cl-ink)] py-3.5 text-base font-bold text-white">
           Next Field
         </button>
       </div>

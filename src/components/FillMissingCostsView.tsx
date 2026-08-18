@@ -37,25 +37,25 @@ export function FillMissingCostsView({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
-      <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 px-4 py-3">
-        <button onClick={onClose} aria-label="Back" className="text-black">
+    <div className="fixed inset-0 z-50 flex flex-col [background:var(--cl-card)] [color:var(--cl-ink)]">
+      <div className="flex shrink-0 items-center gap-3 border-b [border-color:var(--cl-line)] px-4 py-3">
+        <button onClick={onClose} aria-label="Back" className="[color:var(--cl-ink)]">
           <ChevronLeftIcon className="h-5 w-5" />
         </button>
         <h1 className="flex-1 truncate text-base font-semibold">Fill Missing Costs</h1>
-        <span className="shrink-0 text-xs text-gray-500">{missing.length} left</span>
+        <span className="shrink-0 text-xs [color:var(--cl-ink-2)]">{missing.length} left</span>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {missing.length === 0 ? (
-          <p className="py-10 text-center text-sm text-gray-500">Every variant already has a cost price. Nothing to fill.</p>
+          <p className="py-10 text-center text-sm [color:var(--cl-ink-2)]">Every variant already has a cost price. Nothing to fill.</p>
         ) : (
           <div className="flex flex-col">
             {missing.map(({ variant, productName }, index) => (
-              <div key={variant.id} className="flex items-center gap-3 border-b border-gray-50 py-2.5">
+              <div key={variant.id} className="flex items-center gap-3 border-b [border-color:var(--cl-line-2)] py-2.5">
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-black">{productName}</div>
-                  {variant.label !== 'Standard' && <div className="truncate text-xs text-gray-500">{variant.label}</div>}
+                  <div className="truncate text-sm font-medium [color:var(--cl-ink)]">{productName}</div>
+                  {variant.label !== 'Standard' && <div className="truncate text-xs [color:var(--cl-ink-2)]">{variant.label}</div>}
                 </div>
                 <input
                   ref={(el) => {
@@ -66,7 +66,7 @@ export function FillMissingCostsView({ onClose }: { onClose: () => void }) {
                   inputMode="decimal"
                   step="0.01"
                   placeholder="0.00"
-                  className="tabular w-24 shrink-0 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-right text-sm font-semibold text-black outline-none focus:border-black"
+                  className="tabular w-24 shrink-0 rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-2 py-1.5 text-right text-sm font-semibold [color:var(--cl-ink)] outline-none focus:[border-color:var(--cl-amber)]"
                   onFocus={selectOnFocus}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {

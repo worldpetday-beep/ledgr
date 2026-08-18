@@ -40,16 +40,16 @@ export function ProductDetailsEditor({ productId, onClose }: { productId: number
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
+    <div className="fixed inset-0 z-50 flex flex-col [background:var(--cl-card)] [color:var(--cl-ink)]">
       <PDHeader title="Title & description" onBack={onClose} right={<PDSaveButton onClick={save} saving={saving} disabled={!name.trim()} />} />
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="flex flex-col gap-4">
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">Title</label>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Title</label>
             <input className={pdInputClass} value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">Description</label>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Description</label>
             <textarea
               className={pdInputClass + ' min-h-[140px] resize-y'}
               value={description}
@@ -57,7 +57,7 @@ export function ProductDetailsEditor({ productId, onClose }: { productId: number
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">Category</label>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Category</label>
             <input list="pd-category-list" className={pdInputClass} value={category} onChange={(e) => setCategory(e.target.value)} />
             <datalist id="pd-category-list">
               {categoryOptions.map((c) => (

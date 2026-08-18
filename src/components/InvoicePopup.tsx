@@ -96,25 +96,25 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
   }
 
   return (
-    <div className="rounded-xl border border-slate-100 bg-white p-3">
+    <div className="rounded-xl border [border-color:var(--cl-line)] [background:var(--cl-card)] p-3">
       <div className="flex items-start gap-2">
         <input
           type="number"
           min={1}
           inputMode="numeric"
-          className="w-14 shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-center text-sm font-semibold text-slate-900"
+          className="w-14 shrink-0 rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-2 py-2 text-center text-sm font-semibold [color:var(--cl-ink)]"
           value={qty}
           onFocus={selectOnFocus}
           onChange={(e) => setQty(e.target.value)}
           onBlur={commit}
         />
         <input
-          className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-sm font-medium text-slate-900"
+          className="min-w-0 flex-1 rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-2 py-2 text-sm font-medium [color:var(--cl-ink)]"
           value={itemName}
           onChange={(e) => setItemName(e.target.value)}
           onBlur={commit}
         />
-        <button onClick={remove} disabled={busy} aria-label="Delete line" className="shrink-0 p-1.5 text-slate-400 hover:text-red-600">
+        <button onClick={remove} disabled={busy} aria-label="Delete line" className="shrink-0 p-1.5 [color:var(--cl-ink-3)] hover:text-red-600">
           <TrashIcon className="h-4 w-4" />
         </button>
       </div>
@@ -122,7 +122,7 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
       <button
         type="button"
         onClick={() => setRelinkOpen((v) => !v)}
-        className="mt-2 flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-900"
+        className="mt-2 flex items-center gap-1 text-xs font-medium [color:var(--cl-ink-2)] hover:[color:var(--cl-ink)]"
       >
         <SearchIcon className="h-3 w-3" />
         {relinkOpen ? 'Cancel' : 'Relink to a different product'}
@@ -131,20 +131,20 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
         <div className="mt-1.5">
           <input
             autoFocus
-            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+            className="w-full rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-2 py-1.5 text-sm [color:var(--cl-ink)]"
             placeholder="Search products…"
             value={relinkQuery}
             onChange={(e) => setRelinkQuery(e.target.value)}
           />
           {relinkResults.length > 0 && (
-            <div className="mt-1 flex flex-col overflow-hidden rounded-lg border border-slate-200">
+            <div className="mt-1 flex flex-col overflow-hidden rounded-lg border [border-color:var(--cl-line)]">
               {relinkResults.map((r) => (
                 <button
                   key={`${r.product.id}-${r.variant?.id ?? 'none'}`}
                   type="button"
                   onClick={() => relinkTo(r.product, r.variant)}
                   disabled={busy}
-                  className="border-t border-slate-100 px-2.5 py-2 text-left text-sm text-slate-900 first:border-t-0 hover:bg-slate-50"
+                  className="border-t [border-color:var(--cl-line)] px-2.5 py-2 text-left text-sm [color:var(--cl-ink)] first:border-t-0 hover:[background:var(--cl-line-2)]"
                 >
                   {r.label}
                 </button>
@@ -155,23 +155,23 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
       )}
 
       <div className="mt-2 flex items-center justify-between text-sm">
-        <span className="text-slate-500">Unit price</span>
-        {unitPriceMissing ? <RedWarning text="Missing price" /> : <span className="tabular font-medium text-slate-900">{money(unitPrice, sale.currency)}</span>}
+        <span className="[color:var(--cl-ink-2)]">Unit price</span>
+        {unitPriceMissing ? <RedWarning text="Missing price" /> : <span className="tabular font-medium [color:var(--cl-ink)]">{money(unitPrice, sale.currency)}</span>}
       </div>
       <div className="mt-1 flex items-center justify-between text-sm">
-        <span className="text-slate-500">Stock remaining</span>
-        {stock === null ? <RedWarning text="No inventory data" /> : <span className="tabular font-medium text-slate-900">{stock}</span>}
+        <span className="[color:var(--cl-ink-2)]">Stock remaining</span>
+        {stock === null ? <RedWarning text="No inventory data" /> : <span className="tabular font-medium [color:var(--cl-ink)]">{stock}</span>}
       </div>
 
       <div className="mt-2 grid grid-cols-2 gap-2">
         <div>
-          <label className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">LRD</label>
+          <label className="mb-1 block text-[10px] font-semibold uppercase [color:var(--cl-ink-3)]">LRD</label>
           <input
             type="number"
             min={0}
             step="0.01"
             inputMode="decimal"
-            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+            className="w-full rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-2 py-1.5 text-sm [color:var(--cl-ink)]"
             placeholder="0.00"
             value={lrdAmount}
             onFocus={selectOnFocus}
@@ -180,13 +180,13 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
           />
         </div>
         <div>
-          <label className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">USD</label>
+          <label className="mb-1 block text-[10px] font-semibold uppercase [color:var(--cl-ink-3)]">USD</label>
           <input
             type="number"
             min={0}
             step="0.01"
             inputMode="decimal"
-            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+            className="w-full rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-2 py-1.5 text-sm [color:var(--cl-ink)]"
             placeholder="0.00"
             value={usdAmount}
             onFocus={selectOnFocus}
@@ -197,13 +197,13 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
       </div>
 
       <div className="mt-2">
-        <label className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Cost at sale (total, for profit calc)</label>
+        <label className="mb-1 block text-[10px] font-semibold uppercase [color:var(--cl-ink-3)]">Cost at sale (total, for profit calc)</label>
         <input
           type="number"
           min={0}
           step="0.01"
           inputMode="decimal"
-          className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-900"
+          className="w-full rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-2 py-1.5 text-sm [color:var(--cl-ink)]"
           placeholder="0.00"
           value={costAtSale}
           onFocus={selectOnFocus}
@@ -254,22 +254,22 @@ export function InvoicePopup({ order, dailyIndex, onClose }: { order: InvoiceOrd
   const profitLrd = order.lines.filter((l) => l.currency === 'LRD').reduce((s, l) => s + profitOf(l), 0)
 
   return (
-    <BottomSheet open={order != null} onClose={onClose} contentClassName="!bg-white !text-slate-900">
+    <BottomSheet open={order != null} onClose={onClose} contentClassName="![background:var(--cl-card)] ![color:var(--cl-ink)]">
       <div className="flex max-w-full flex-col gap-4 overflow-x-hidden" style={{ boxSizing: 'border-box' }}>
-        <div className="border-b border-slate-100 pb-3">
+        <div className="border-b [border-color:var(--cl-line)] pb-3">
           <div className="flex items-center justify-between gap-2">
-            <span className="min-w-0 truncate text-lg font-bold text-slate-900">Invoice #{dailyIndex}</span>
-            <span className="shrink-0 text-sm text-slate-500">{formatDateTimeMonrovia(order.timestamp)}</span>
+            <span className="min-w-0 truncate text-lg font-bold [color:var(--cl-ink)]">Invoice #{dailyIndex}</span>
+            <span className="shrink-0 text-sm [color:var(--cl-ink-2)]">{formatDateTimeMonrovia(order.timestamp)}</span>
           </div>
-          <div className="mt-1 text-sm text-slate-500">
+          <div className="mt-1 text-sm [color:var(--cl-ink-2)]">
             {order.lines.length} item{order.lines.length === 1 ? '' : 's'} · Ticket #{order.orderNumber}
           </div>
         </div>
 
         <div>
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Customer</label>
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Customer</label>
           <input
-            className="w-full max-w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-900"
+            className="w-full max-w-full rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-3 py-2 text-sm font-medium [color:var(--cl-ink)]"
             style={{ boxSizing: 'border-box' }}
             value={customerName}
             placeholder={`Customer #${dailyIndex}`}
@@ -287,28 +287,28 @@ export function InvoicePopup({ order, dailyIndex, onClose }: { order: InvoiceOrd
           })}
         </div>
 
-        <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Profit matrix</div>
+        <div className="rounded-xl border [border-color:var(--cl-line)] [background:var(--cl-line-2)] p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Profit matrix</div>
           <div className="mt-2 flex flex-col gap-1 text-sm">
             <div className="flex items-center justify-between">
-              <span className="text-slate-600">Sold total</span>
-              <span className="tabular font-medium text-slate-900">
+              <span className="[color:var(--cl-ink-2)]">Sold total</span>
+              <span className="tabular font-medium [color:var(--cl-ink)]">
                 {soldUsd > 0 && money(soldUsd, 'USD')}
                 {soldUsd > 0 && soldLrd > 0 && ' + '}
                 {soldLrd > 0 && money(soldLrd, 'LRD')}
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-slate-600">Cost total</span>
-              <span className="tabular font-medium text-slate-900">
+              <span className="[color:var(--cl-ink-2)]">Cost total</span>
+              <span className="tabular font-medium [color:var(--cl-ink)]">
                 {costUsd > 0 && money(costUsd, 'USD')}
                 {costUsd > 0 && costLrd > 0 && ' + '}
                 {costLrd > 0 && money(costLrd, 'LRD')}
                 {costUsd <= 0 && costLrd <= 0 && '—'}
               </span>
             </div>
-            <div className="mt-1 flex items-center justify-between border-t border-slate-200 pt-1.5">
-              <span className="font-semibold text-slate-700">Net profit</span>
+            <div className="mt-1 flex items-center justify-between border-t [border-color:var(--cl-line)] pt-1.5">
+              <span className="font-semibold [color:var(--cl-ink)]">Net profit</span>
               <span className="tabular font-bold text-green-700">
                 {money(profitUsd, 'USD')} + {money(profitLrd, 'LRD')}
               </span>

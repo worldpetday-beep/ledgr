@@ -38,12 +38,12 @@ export function ProductPriceEditor({ productId, onClose }: { productId: number; 
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
+    <div className="fixed inset-0 z-50 flex flex-col [background:var(--cl-card)] [color:var(--cl-ink)]">
       <PDHeader title="Pricing" onBack={onClose} right={<PDSaveButton onClick={save} saving={saving} />} />
       <div className="flex-1 overflow-y-auto px-4 py-2">
         {(variants ?? []).map((v: Variant, index) => (
-          <div key={v.id} className="flex items-center gap-3 border-b border-gray-50 py-3">
-            <div className="min-w-0 flex-1 truncate text-sm font-medium text-black">{variantDisplayLabel(product?.name ?? '', v.label)}</div>
+          <div key={v.id} className="flex items-center gap-3 border-b [border-color:var(--cl-line-2)] py-3">
+            <div className="min-w-0 flex-1 truncate text-sm font-medium [color:var(--cl-ink)]">{variantDisplayLabel(product?.name ?? '', v.label)}</div>
             <input
               ref={(el) => {
                 inputRefs.current[v.id!] = el

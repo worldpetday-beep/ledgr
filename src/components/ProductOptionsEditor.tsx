@@ -80,12 +80,12 @@ export function ProductOptionsEditor({ productId, onClose }: { productId: number
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
+    <div className="fixed inset-0 z-50 flex flex-col [background:var(--cl-card)] [color:var(--cl-ink)]">
       <PDHeader title="Options" onBack={onClose} right={<PDSaveButton onClick={save} saving={saving} />} />
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="flex flex-col gap-4">
           {draft.map((opt, oi) => (
-            <div key={oi} className="rounded-xl border border-gray-100 p-3">
+            <div key={oi} className="rounded-xl border [border-color:var(--cl-line)] p-3">
               <div className="flex items-center gap-2">
                 <input
                   className={pdInputClass}
@@ -96,14 +96,14 @@ export function ProductOptionsEditor({ productId, onClose }: { productId: number
                 <button
                   onClick={() => setDraft((d) => d.filter((_, i) => i !== oi))}
                   aria-label="Remove option"
-                  className="shrink-0 text-gray-400 hover:text-red-600"
+                  className="shrink-0 [color:var(--cl-ink-3)] hover:text-red-600"
                 >
                   <TrashIcon className="h-4 w-4" />
                 </button>
               </div>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {opt.values.map((val, vi) => (
-                  <span key={vi} className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-3 py-1 text-sm">
+                  <span key={vi} className="inline-flex items-center gap-1 rounded-full [background:var(--cl-line-2)] px-3 py-1 text-sm">
                     {val}
                     <button
                       onClick={() =>
@@ -138,7 +138,7 @@ export function ProductOptionsEditor({ productId, onClose }: { productId: number
 
           <button
             onClick={() => setDraft((d) => [...d, { name: '', values: [] }])}
-            className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-2.5 text-sm font-medium text-gray-500"
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed [border-color:var(--cl-line)] px-3 py-2.5 text-sm font-medium [color:var(--cl-ink-2)]"
           >
             <PlusIcon className="h-4 w-4" /> Add option
           </button>

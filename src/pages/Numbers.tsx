@@ -1,9 +1,17 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, profitOf, type Currency } from '../db'
+import {
+  db,
+  profitOf,
+  EXCHANGE_RATE_KEY,
+  DEFAULT_EXCHANGE_RATE,
+  BRANCHES_KEY,
+  DEFAULT_BRANCHES,
+  type Currency,
+} from '../db'
 import { Card, Badge, BottomSheet, Field, Button, inputClass } from '../components/ui'
-import { AlertIcon } from '../components/icons'
-import { money, dateKeyMonrovia, isLowStock } from '../lib/format'
+import { AlertIcon, SettingsIcon, PlusIcon, TrashIcon } from '../components/icons'
+import { money, dateKeyMonrovia, isLowStock, selectOnFocus } from '../lib/format'
 import { lrdAmountOf, usdAmountOf, withoutVoided } from '../lib/salesLedger'
 import { Link } from 'react-router-dom'
 import {
@@ -64,12 +72,13 @@ function rangeFor(filter: DateFilter, customStart: string, customEnd: string): {
   }
 }
 
-export default function Dashboard() {
+export default function Numbers() {
   const [filter, setFilter] = useState<DateFilter>('today')
   const [customRangeOpen, setCustomRangeOpen] = useState(false)
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
   const [trendCurrency, setTrendCurrency] = useState<Currency>('USD')
+  const [setupOpen, setSetupOpen] = useState(false)
 
   const { start, end, label } = useMemo(() => rangeFor(filter, customStart, customEnd), [filter, customStart, customEnd])
 
@@ -166,14 +175,23 @@ export default function Dashboard() {
       <div className="sticky top-0 z-10 -mx-4 bg-[var(--page-plane)] px-4 pb-3 pt-1 md:-mx-8 md:px-8">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold text-[var(--text-primary)]">Financial Dashboard</h1>
+            <h1 className="text-xl font-semibold text-[var(--text-primary)]">Numbers</h1>
             <p className="truncate text-sm text-[var(--text-secondary)]">{label}</p>
           </div>
-          <div className="shrink-0 text-right">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Net Profit</div>
-            <div className="tabular text-sm font-bold" style={{ color: '#1a7f37' }}>
-              {money(netProfit.usd, 'USD')} + {money(netProfit.lrd, 'LRD')}
+          <div className="flex shrink-0 items-center gap-3">
+            <div className="text-right">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Net Profit</div>
+              <div className="tabular text-sm font-bold" style={{ color: '#1a7f37' }}>
+                {money(netProfit.usd, 'USD')} + {money(netProfit.lrd, 'LRD')}
+              </div>
             </div>
+            <button
+              onClick={() => setSetupOpen(true)}
+              aria-label="Setup"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-1)] text-[var(--text-secondary)]"
+            >
+              <SettingsIcon className="h-4 w-4" />
+            </button>
           </div>
         </div>
         <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
@@ -349,6 +367,260 @@ export default function Dashboard() {
           </Button>
         </div>
       </BottomSheet>
+
+      {setupOpen && <SetupSheet onClose={() => setSetupOpen(false)} />}
     </div>
+  )
+}
+
+// Everything the app already lets you configure, in one place: exchange
+// rate, branches (editable/addable), categories, and backup/restore --
+// folded in here since Numbers absorbed the old standalone Settings tab.
+function SetupSheet({ onClose }: { onClose: () => void }) {
+  const categories = useLiveQuery(() => db.categories.orderBy('name').toArray(), [])
+  const [newCategory, setNewCategory] = useState('')
+  const [status, setStatus] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
+  const [rateInput, setRateInput] = useState<string | null>(null)
+  const rateValue = rateInput ?? rateRow?.value ?? String(DEFAULT_EXCHANGE_RATE)
+
+  const branchesRow = useLiveQuery(() => db.settings.get(BRANCHES_KEY), [])
+  const branches = useMemo<string[]>(() => {
+    if (!branchesRow) return DEFAULT_BRANCHES
+    try {
+      const parsed = JSON.parse(branchesRow.value)
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_BRANCHES
+    } catch {
+      return DEFAULT_BRANCHES
+    }
+  }, [branchesRow])
+  const [newBranch, setNewBranch] = useState('')
+
+  async function saveRate(value: string) {
+    setRateInput(value)
+    const num = Number(value)
+    if (num > 0) await db.settings.put({ key: EXCHANGE_RATE_KEY, value: String(num) })
+  }
+
+  async function saveBranches(next: string[]) {
+    await db.settings.put({ key: BRANCHES_KEY, value: JSON.stringify(next) })
+  }
+
+  function addBranch() {
+    const name = newBranch.trim()
+    if (!name || branches.includes(name)) return
+    saveBranches([...branches, name])
+    setNewBranch('')
+  }
+
+  function removeBranch(name: string) {
+    if (branches.length <= 1) return
+    saveBranches(branches.filter((b) => b !== name))
+  }
+
+  async function addCategory() {
+    const name = newCategory.trim()
+    if (!name) return
+    const exists = await db.categories.where('name').equalsIgnoreCase(name).first()
+    if (!exists) await db.categories.add({ name })
+    setNewCategory('')
+  }
+
+  async function removeCategory(id: number) {
+    await db.categories.delete(id)
+  }
+
+  async function exportBackup() {
+    const [products, variants, sales, cats, transfers, drawerCounts, warehouseLedger, abbreviations, customUnits] = await Promise.all([
+      db.products.toArray(),
+      db.variants.toArray(),
+      db.sales.toArray(),
+      db.categories.toArray(),
+      db.stockTransfers.toArray(),
+      db.drawerCounts.toArray(),
+      db.warehouseLedger.toArray(),
+      db.abbreviations.toArray(),
+      db.customUnits.toArray(),
+    ])
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      products,
+      variants,
+      sales,
+      categories: cats,
+      stockTransfers: transfers,
+      drawerCounts,
+      warehouseLedger,
+      abbreviations,
+      customUnits,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `ledgr-backup-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    setStatus('Backup downloaded.')
+  }
+
+  async function importBackup(file: File) {
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+      await db.transaction('rw', db.products, db.variants, db.sales, db.categories, db.stockTransfers, async () => {
+        const productIdMap = new Map<number, number>()
+        if (Array.isArray(data.products)) {
+          for (const product of data.products) {
+            const { id, image, ...rest } = product
+            const newId = (await db.products.add({ archived: false, description: '', images: [], options: [], ...rest })) as number
+            if (id != null) productIdMap.set(id, newId)
+          }
+        }
+        const variantIdMap = new Map<number, number>()
+        if (Array.isArray(data.variants)) {
+          for (const variant of data.variants) {
+            const { id, productId, ...rest } = variant
+            const newProductId = productIdMap.get(productId) ?? productId
+            const newId = (await db.variants.add({ optionValues: [], ...rest, productId: newProductId })) as number
+            if (id != null) variantIdMap.set(id, newId)
+          }
+        }
+        if (Array.isArray(data.sales)) {
+          for (const sale of data.sales) {
+            const { id, productId, variantId, ...rest } = sale
+            await db.sales.add({
+              ...rest,
+              productId: productId != null ? productIdMap.get(productId) ?? productId : undefined,
+              variantId: variantId != null ? variantIdMap.get(variantId) ?? variantId : undefined,
+            })
+          }
+        }
+        if (Array.isArray(data.categories)) {
+          for (const cat of data.categories) {
+            const exists = await db.categories.where('name').equalsIgnoreCase(cat.name).first()
+            if (!exists) await db.categories.add({ name: cat.name, allowedUnits: cat.allowedUnits })
+          }
+        }
+        if (Array.isArray(data.stockTransfers)) {
+          for (const transfer of data.stockTransfers) {
+            const { id, productId, variantId, ...rest } = transfer
+            await db.stockTransfers.add({
+              ...rest,
+              productId: productId != null ? productIdMap.get(productId) ?? productId : productId,
+              variantId: variantId != null ? variantIdMap.get(variantId) ?? variantId : variantId,
+            })
+          }
+        }
+      })
+      setStatus('Backup imported successfully.')
+    } catch {
+      setStatus('Could not read that file — make sure it is a Ledgr backup JSON.')
+    }
+  }
+
+  return (
+    <BottomSheet open onClose={onClose}>
+      <div className="flex flex-col gap-4 pt-2">
+        <h2 className="text-base font-semibold text-[var(--text-primary)]">Setup</h2>
+
+        <div>
+          <Field label="Exchange rate (L$ per $1)">
+            <input
+              type="number"
+              min={1}
+              step="1"
+              className={inputClass + ' w-40'}
+              value={rateValue}
+              onFocus={selectOnFocus}
+              onChange={(e) => saveRate(e.target.value)}
+            />
+          </Field>
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Branches</div>
+          <div className="mb-2 flex flex-wrap gap-2">
+            {branches.map((b) => (
+              <span key={b} className="inline-flex items-center gap-1.5 rounded-full bg-[var(--page-plane)] px-3 py-1 text-xs font-medium">
+                {b}
+                {branches.length > 1 && (
+                  <button onClick={() => removeBranch(b)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Remove branch">
+                    <TrashIcon className="h-3 w-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className={inputClass}
+              placeholder="New branch name"
+              value={newBranch}
+              onChange={(e) => setNewBranch(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addBranch()}
+            />
+            <Button onClick={addBranch}>
+              <PlusIcon className="h-4 w-4" />
+              Add
+            </Button>
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Categories</div>
+          <div className="mb-2 flex flex-wrap gap-2">
+            {(categories ?? []).map((c) => (
+              <span key={c.id} className="inline-flex items-center gap-1.5 rounded-full bg-[var(--page-plane)] px-3 py-1 text-xs font-medium">
+                {c.name}
+                <button onClick={() => c.id && removeCategory(c.id)} className="text-[var(--text-muted)] hover:text-[var(--status-critical)]" aria-label="Remove">
+                  <TrashIcon className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            {(categories ?? []).length === 0 && (
+              <p className="text-sm text-[var(--text-muted)]">No custom categories yet.</p>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className={inputClass}
+              placeholder="New category name"
+              value={newCategory}
+              onChange={(e) => setNewCategory(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addCategory()}
+            />
+            <Button onClick={addCategory}>
+              <PlusIcon className="h-4 w-4" />
+              Add
+            </Button>
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Backup</div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={exportBackup}>Export backup (.json)</Button>
+            <Button variant="secondary" onClick={() => fileInputRef.current?.click()}>
+              Import backup
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) importBackup(file)
+                e.target.value = ''
+              }}
+            />
+          </div>
+          {status && <p className="mt-2 text-xs text-[var(--text-muted)]">{status}</p>}
+        </div>
+      </div>
+    </BottomSheet>
   )
 }

@@ -7,13 +7,13 @@ import { money, selectOnFocus, variantDisplayLabel } from '../lib/format'
 
 function StockField({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
   return (
-    <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2">
-      <span className="text-sm text-gray-600">{label}</span>
+    <div className="flex items-center justify-between rounded-lg border [border-color:var(--cl-line)] px-3 py-2">
+      <span className="text-sm [color:var(--cl-ink-2)]">{label}</span>
       <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={() => onChange(Math.max(0, value - 1))}
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-gray-300 text-base font-semibold text-black"
+          className="flex h-7 w-7 items-center justify-center rounded-full border [border-color:var(--cl-line)] text-base font-semibold [color:var(--cl-ink)]"
           aria-label={`Decrease ${label}`}
         >
           −
@@ -22,7 +22,7 @@ function StockField({ label, value, onChange }: { label: string; value: number; 
         <button
           type="button"
           onClick={() => onChange(value + 1)}
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-gray-300 text-base font-semibold text-black"
+          className="flex h-7 w-7 items-center justify-center rounded-full border [border-color:var(--cl-line)] text-base font-semibold [color:var(--cl-ink)]"
           aria-label={`Increase ${label}`}
         >
           +
@@ -79,18 +79,18 @@ function SingleVariantEditor({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
+    <div className="fixed inset-0 z-50 flex flex-col [background:var(--cl-card)] [color:var(--cl-ink)]">
       <PDHeader title={variantDisplayLabel(productName, variant.label)} onBack={onClose} right={<PDSaveButton onClick={save} saving={saving} />} />
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="flex flex-col gap-4">
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">Variant name</label>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Variant name</label>
             <input className={pdInputClass} value={label} onChange={(e) => setLabel(e.target.value)} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">Selling price</label>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Selling price</label>
               <input
                 type="number"
                 min={0}
@@ -102,7 +102,7 @@ function SingleVariantEditor({
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">Cost price</label>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Cost price</label>
               <input
                 type="number"
                 min={0}
@@ -116,13 +116,13 @@ function SingleVariantEditor({
             </div>
           </div>
 
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex items-center gap-2 text-sm [color:var(--cl-ink)]">
             <input type="checkbox" checked={costUnknown} onChange={(e) => setCostUnknown(e.target.checked)} />
             Cost price unknown
           </label>
 
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Inventory</div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Inventory</div>
             <div className="flex flex-col gap-2">
               <StockField label="Store floor" value={stockMyShop} onChange={setStockMyShop} />
               <StockField label="Warehouse (Vishal)" value={stockVishalShop} onChange={setStockVishalShop} />
@@ -130,7 +130,7 @@ function SingleVariantEditor({
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">Low stock alert below</label>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Low stock alert below</label>
             <input
               type="number"
               min={0}
@@ -142,7 +142,7 @@ function SingleVariantEditor({
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">SKU / barcode (optional)</label>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">SKU / barcode (optional)</label>
             <input className={pdInputClass} value={sku} onChange={(e) => setSku(e.target.value)} />
           </div>
 
@@ -182,22 +182,22 @@ export function ProductVariantsEditor({ productId, onClose }: { productId: numbe
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
+    <div className="fixed inset-0 z-50 flex flex-col [background:var(--cl-card)] [color:var(--cl-ink)]">
       <PDHeader title={`Variants (${variants?.length ?? 0})`} onBack={onClose} />
       <div className="flex-1 overflow-y-auto">
         {(variants ?? []).map((v) => (
           <button
             key={v.id}
             onClick={() => setEditingId(v.id!)}
-            className="flex w-full items-center gap-3 border-b border-gray-50 px-4 py-3 text-left"
+            className="flex w-full items-center gap-3 border-b [border-color:var(--cl-line-2)] px-4 py-3 text-left"
           >
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-black">{variantDisplayLabel(product?.name ?? '', v.label)}</div>
-              <div className="tabular truncate text-xs text-gray-500">
+              <div className="truncate text-sm font-medium [color:var(--cl-ink)]">{variantDisplayLabel(product?.name ?? '', v.label)}</div>
+              <div className="tabular truncate text-xs [color:var(--cl-ink-2)]">
                 {money(v.sellPrice, v.currency)} · {v.stockMyShop + v.stockVishalShop} in stock
               </div>
             </div>
-            <ChevronRightIcon className="h-4 w-4 shrink-0 text-gray-300" />
+            <ChevronRightIcon className="h-4 w-4 shrink-0 [color:var(--cl-ink-3)]" />
           </button>
         ))}
       </div>

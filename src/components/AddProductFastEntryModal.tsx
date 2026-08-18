@@ -206,11 +206,11 @@ export function AddProductFastEntryModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-4 pb-6 pt-[8vh]">
-      <div className="flex aspect-[3/4] w-full max-w-[340px] flex-col overflow-hidden rounded-2xl bg-white text-black shadow-xl">
-        <div className="flex shrink-0 items-center justify-between border-b border-gray-100 px-4 py-3">
+    <div className="fixed inset-0 z-50 flex items-start justify-center [background:var(--cl-ink)]/40 px-4 pb-6 pt-[8vh]">
+      <div className="flex aspect-[3/4] w-full max-w-[340px] flex-col overflow-hidden rounded-2xl [background:var(--cl-card)] [color:var(--cl-ink)] shadow-xl">
+        <div className="flex shrink-0 items-center justify-between border-b [border-color:var(--cl-line)] px-4 py-3">
           <h1 className="text-sm font-semibold">{stage === 'entry' ? 'Quick Add Item' : 'Confirm This Inventory Entry'}</h1>
-          <button onClick={onClose} aria-label="Close" className="text-sm font-medium text-gray-400">
+          <button onClick={onClose} aria-label="Close" className="text-sm font-medium [color:var(--cl-ink-3)]">
             Cancel
           </button>
         </div>
@@ -218,7 +218,7 @@ export function AddProductFastEntryModal({
         {stage === 'entry' ? (
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
             <div className="relative">
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">
                 {parentProduct ? 'Item Description' : 'Item Description (or existing product)'}
               </label>
               <input
@@ -251,16 +251,16 @@ export function AddProductFastEntryModal({
                 </span>
               ) : (
                 (suggestions.length > 0 || familySuggestion) && (
-                  <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
+                  <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-card)] shadow-lg">
                     {suggestions.map((p) => (
                       <button
                         key={p.id}
                         type="button"
                         onClick={() => lockToProduct(p)}
-                        className="flex w-full items-center justify-between border-b border-gray-50 px-3 py-2 text-left text-sm last:border-b-0 hover:bg-gray-50"
+                        className="flex w-full items-center justify-between border-b [border-color:var(--cl-line-2)] px-3 py-2 text-left text-sm last:border-b-0 hover:[background:var(--cl-line-2)]"
                       >
                         <span className="min-w-0 truncate">{p.name}</span>
-                        {suggestionIsMaster(p) && <span className="shrink-0 text-xs text-gray-400">has variants</span>}
+                        {suggestionIsMaster(p) && <span className="shrink-0 text-xs [color:var(--cl-ink-3)]">has variants</span>}
                       </button>
                     ))}
                     {suggestions.length === 0 && familySuggestion && (
@@ -278,7 +278,7 @@ export function AddProductFastEntryModal({
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">Cost Price</label>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Cost Price</label>
               <input
                 ref={costRef}
                 type="number"
@@ -295,7 +295,7 @@ export function AddProductFastEntryModal({
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-400">Inventory Stock Qty</label>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Inventory Stock Qty</label>
               <input
                 ref={stockRef}
                 type="number"
@@ -314,31 +314,31 @@ export function AddProductFastEntryModal({
               type="button"
               disabled={!canContinue}
               onClick={() => setStage('confirm')}
-              className="mt-auto w-full rounded-lg bg-black py-2.5 text-sm font-semibold text-white disabled:opacity-30"
+              className="mt-auto w-full rounded-lg [background:var(--cl-ink)] py-2.5 text-sm font-semibold text-white disabled:opacity-30"
             >
               Continue
             </button>
           </div>
         ) : (
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
-            <div className="flex flex-col gap-2 rounded-xl border border-gray-100 p-3 text-sm">
+            <div className="flex flex-col gap-2 rounded-xl border [border-color:var(--cl-line)] p-3 text-sm">
               <div className="flex justify-between gap-3">
-                <span className="text-gray-500">Item</span>
+                <span className="[color:var(--cl-ink-2)]">Item</span>
                 <span className="min-w-0 truncate text-right font-semibold">
                   {parentProduct ? `${parentProduct.name} - ${variantSuffix}` : description.trim()}
                 </span>
               </div>
               <div className="flex justify-between gap-3">
-                <span className="text-gray-500">Cost Price</span>
+                <span className="[color:var(--cl-ink-2)]">Cost Price</span>
                 <span className="tabular font-semibold">{Number(costPrice) || 0}</span>
               </div>
               <div className="flex justify-between gap-3">
-                <span className="text-gray-500">Stock Qty</span>
+                <span className="[color:var(--cl-ink-2)]">Stock Qty</span>
                 <span className="tabular font-semibold">{Number(stockQty) || 0}</span>
               </div>
               {parentProduct && (
                 <div className="flex justify-between gap-3">
-                  <span className="text-gray-500">Grouped under</span>
+                  <span className="[color:var(--cl-ink-2)]">Grouped under</span>
                   <span className="min-w-0 truncate text-right font-semibold">{parentProduct.name}</span>
                 </div>
               )}
@@ -348,7 +348,7 @@ export function AddProductFastEntryModal({
               <button
                 type="button"
                 onClick={() => setStage('entry')}
-                className="flex-1 rounded-lg border border-gray-200 py-2.5 text-sm font-semibold text-gray-700"
+                className="flex-1 rounded-lg border [border-color:var(--cl-line)] py-2.5 text-sm font-semibold [color:var(--cl-ink)]"
               >
                 Back
               </button>
@@ -356,7 +356,7 @@ export function AddProductFastEntryModal({
                 type="button"
                 disabled={saving}
                 onClick={confirmSave}
-                className="flex-1 rounded-lg bg-black py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+                className="flex-1 rounded-lg [background:var(--cl-ink)] py-2.5 text-sm font-semibold text-white disabled:opacity-40"
               >
                 {saving ? 'Saving…' : 'Confirm'}
               </button>

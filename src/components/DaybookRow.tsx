@@ -41,22 +41,22 @@ export function DaybookRow({
         disabled={!onEdit}
         className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-default"
       >
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-black text-[11px] font-bold text-white">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full [background:var(--cl-ink)] text-[11px] font-bold text-white">
           {sale.qty}
         </div>
         {/* Name and variant get their own lines (variant indented, smaller)
             instead of one concatenated truncated string -- a long name no
             longer has to fight a variant label for the same line. */}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-medium leading-tight text-slate-900">{sale.itemName}</div>
-          {sale.variant && <div className="truncate pl-1.5 text-[11px] leading-tight text-slate-500">— {sale.variant}</div>}
-          <div className="truncate text-[11px] leading-tight text-slate-400">
+          <div className="truncate text-[13px] font-medium leading-tight [color:var(--cl-ink)]">{sale.itemName}</div>
+          {sale.variant && <div className="truncate pl-1.5 text-[11px] leading-tight [color:var(--cl-ink-2)]">— {sale.variant}</div>}
+          <div className="truncate text-[11px] leading-tight [color:var(--cl-ink-3)]">
             {sale.unitType ? `${sale.unitType} · ` : ''}
             {sale.location === 'vishalShop' ? 'Warehouse (Vishal)' : 'Store floor'}
             {sale.tbs ? ` · ${sale.pickedUp ? 'Picked up' : 'TBS'}` : ''}
           </div>
           {stockRemaining !== null && (
-            <div className="truncate text-[10px] leading-tight text-slate-400">[ {stockRemaining} left ]</div>
+            <div className="truncate text-[10px] leading-tight [color:var(--cl-ink-3)]">[ {stockRemaining} left ]</div>
           )}
         </div>
         <div className="flex shrink-0 flex-col items-end">
@@ -78,12 +78,12 @@ export function DaybookRow({
       {(onDelete || onMarkPickedUp) && (
         <div className="flex shrink-0 items-center gap-1.5">
           {sale.tbs && !sale.pickedUp && onMarkPickedUp && (
-            <button onClick={onMarkPickedUp} className="whitespace-nowrap text-xs font-medium text-slate-900 hover:underline">
+            <button onClick={onMarkPickedUp} className="whitespace-nowrap text-xs font-medium [color:var(--cl-ink)] hover:underline">
               Picked up
             </button>
           )}
           {onDelete && (
-            <button onClick={onDelete} aria-label="Delete item" className="text-slate-400 hover:text-red-600">
+            <button onClick={onDelete} aria-label="Delete item" className="[color:var(--cl-ink-3)] hover:text-red-600">
               <TrashIcon className="h-4 w-4" />
             </button>
           )}

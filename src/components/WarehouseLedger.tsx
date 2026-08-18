@@ -7,8 +7,8 @@ import { formatDateTimeMonrovia, selectOnFocus } from '../lib/format'
 
 function Header({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 px-4 py-3">
-      <button onClick={onBack} aria-label="Back" className="text-black">
+    <div className="flex shrink-0 items-center gap-3 border-b [border-color:var(--cl-line)] px-4 py-3">
+      <button onClick={onBack} aria-label="Back" className="[color:var(--cl-ink)]">
         <ChevronLeftIcon className="h-5 w-5" />
       </button>
       <h1 className="flex-1 truncate text-base font-semibold">{title}</h1>
@@ -78,17 +78,17 @@ export function WarehouseLedgerView({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
+    <div className="fixed inset-0 z-50 flex flex-col [background:var(--cl-card)] [color:var(--cl-ink)]">
       <Header title="Warehouse Ledger" onBack={onClose} />
       <div className="flex-1 overflow-y-auto px-4 py-4">
-        <p className="mb-3 text-xs text-gray-500">
+        <p className="mb-3 text-xs [color:var(--cl-ink-2)]">
           A log of stock moving to/from external depots. This never changes your store-floor inventory counts.
         </p>
 
-        <div className="rounded-xl border border-gray-100 p-3">
+        <div className="rounded-xl border [border-color:var(--cl-line)] p-3">
           <div className="mb-2 flex items-center justify-between">
-            <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">Source</div>
-            <button onClick={() => setManageOpen((v) => !v)} className="text-xs font-medium text-gray-600 hover:text-black">
+            <div className="text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Source</div>
+            <button onClick={() => setManageOpen((v) => !v)} className="text-xs font-medium [color:var(--cl-ink-2)] hover:[color:var(--cl-ink)]">
               {manageOpen ? 'Done' : 'Manage sources'}
             </button>
           </div>
@@ -99,7 +99,7 @@ export function WarehouseLedgerView({ onClose }: { onClose: () => void }) {
                   {s}
                 </button>
                 {manageOpen && s !== DEFAULT_WAREHOUSE_SOURCES[0] && (
-                  <button onClick={() => removeCustomSource(s)} aria-label={`Remove ${s}`} className="text-gray-400 hover:text-red-600">
+                  <button onClick={() => removeCustomSource(s)} aria-label={`Remove ${s}`} className="[color:var(--cl-ink-3)] hover:text-red-600">
                     <TrashIcon className="h-3.5 w-3.5" />
                   </button>
                 )}
@@ -114,7 +114,7 @@ export function WarehouseLedgerView({ onClose }: { onClose: () => void }) {
                 value={newSourceName}
                 onChange={(e) => setNewSourceName(e.target.value)}
               />
-              <button onClick={addCustomSource} aria-label="Add source" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-white">
+              <button onClick={addCustomSource} aria-label="Add source" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full [background:var(--cl-ink)] text-white">
                 <PlusIcon className="h-4 w-4" />
               </button>
             </div>
@@ -147,26 +147,26 @@ export function WarehouseLedgerView({ onClose }: { onClose: () => void }) {
           />
           <input className={shopifyInputClass} placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
-        <button onClick={addEntry} className="mt-3 w-full rounded-lg bg-black py-2.5 text-sm font-semibold text-white">
+        <button onClick={addEntry} className="mt-3 w-full rounded-lg [background:var(--cl-ink)] py-2.5 text-sm font-semibold text-white">
           Log entry
         </button>
 
         <div className="mt-5 flex flex-col">
           {(entries ?? []).map((e, i) => (
-            <div key={e.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${i > 0 ? 'border-t border-gray-100' : ''}`}>
+            <div key={e.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${i > 0 ? 'border-t [border-color:var(--cl-line)]' : ''}`}>
               <div className="min-w-0">
                 <div className="truncate font-medium">{e.description}</div>
-                <div className="text-xs text-gray-400">
+                <div className="text-xs [color:var(--cl-ink-3)]">
                   {e.direction === 'out' ? `Sent to ${e.source}` : `Received from ${e.source}`}
                   {e.qty ? ` · ${e.qty}` : ''} · {formatDateTimeMonrovia(e.timestamp)}
                 </div>
               </div>
-              <button onClick={() => removeEntry(e.id!)} aria-label="Delete entry" className="shrink-0 text-gray-400 hover:text-red-600">
+              <button onClick={() => removeEntry(e.id!)} aria-label="Delete entry" className="shrink-0 [color:var(--cl-ink-3)] hover:text-red-600">
                 <TrashIcon className="h-4 w-4" />
               </button>
             </div>
           ))}
-          {(entries ?? []).length === 0 && <p className="py-8 text-center text-sm text-gray-500">No warehouse movements logged yet.</p>}
+          {(entries ?? []).length === 0 && <p className="py-8 text-center text-sm [color:var(--cl-ink-2)]">No warehouse movements logged yet.</p>}
         </div>
       </div>
     </div>

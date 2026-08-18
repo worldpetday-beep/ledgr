@@ -99,7 +99,7 @@ function AliasPicker({ rawText, onPick }: { rawText: string; onPick: (name: stri
         Unrecognized shorthand — match it to a catalog item
       </div>
       <input
-        className="mt-1.5 w-full rounded-md border border-amber-300 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none"
+        className="mt-1.5 w-full rounded-md border border-amber-300 [background:var(--cl-card)] px-2 py-1.5 text-sm [color:var(--cl-ink)] outline-none"
         placeholder={`Search catalog for "${rawText}"…`}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -111,7 +111,7 @@ function AliasPicker({ rawText, onPick }: { rawText: string; onPick: (name: stri
               key={p.id}
               type="button"
               onClick={() => onPick(p.name)}
-              className="rounded-md px-2 py-1.5 text-left text-sm text-slate-900 hover:bg-amber-100"
+              className="rounded-md px-2 py-1.5 text-left text-sm [color:var(--cl-ink)] hover:bg-amber-100"
             >
               {p.name}
             </button>
@@ -195,7 +195,7 @@ export function DaybookDraftReview({
         {images.length > 1 && (
           <div className="flex gap-1.5 bg-slate-900 px-2 pb-2">
             {images.map((_, i) => (
-              <span key={i} className={`h-1 flex-1 rounded-full ${i === (activeLine?.pageIndex ?? 0) ? 'bg-white' : 'bg-slate-600'}`} />
+              <span key={i} className={`h-1 flex-1 rounded-full ${i === (activeLine?.pageIndex ?? 0) ? '[background:var(--cl-card)]' : 'bg-slate-600'}`} />
             ))}
           </div>
         )}
@@ -203,7 +203,7 @@ export function DaybookDraftReview({
 
       <div className="flex max-w-full flex-1 flex-col gap-4 overflow-y-auto px-4 py-4" style={{ boxSizing: 'border-box' }}>
         <div>
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Page date</label>
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Page date</label>
           <input
             type="date"
             className={shopifyInputClass}
@@ -214,7 +214,7 @@ export function DaybookDraftReview({
         </div>
 
         {onAddPage && (
-          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600">
+          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-4 py-3 text-sm font-semibold [color:var(--cl-ink-2)]">
             <PlusIcon className="h-4 w-4" />
             Add another snapshot ({pagesUsed}/{maxPages})
             <input
@@ -242,7 +242,7 @@ export function DaybookDraftReview({
         )}
 
         <div className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold text-slate-900">
+          <h2 className="text-sm font-semibold [color:var(--cl-ink)]">
             Line items ({draft.lines.length}){images.length > 1 ? ` across ${images.length} pages` : ''}
           </h2>
           {draft.lines.map((line) => (
@@ -250,12 +250,12 @@ export function DaybookDraftReview({
               key={line.key}
               onClick={() => setActiveLineKey(line.key)}
               className={`cursor-pointer rounded-xl border p-3 transition-colors ${
-                activeLineKey === line.key ? 'border-slate-900 bg-slate-50' : 'border-slate-100 bg-white'
+                activeLineKey === line.key ? 'border-slate-900 [background:var(--cl-line-2)]' : '[border-color:var(--cl-line)] [background:var(--cl-card)]'
               }`}
             >
               <div className="flex items-center gap-2">
                 <div className="w-16 shrink-0">
-                  <label className="mb-1 flex items-center text-[10px] font-semibold uppercase text-slate-400">
+                  <label className="mb-1 flex items-center text-[10px] font-semibold uppercase [color:var(--cl-ink-3)]">
                     Qty <FlagDot verified={line.qty.verified} />
                   </label>
                   <input
@@ -268,7 +268,7 @@ export function DaybookDraftReview({
                   />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <label className="mb-1 flex items-center text-[10px] font-semibold uppercase text-slate-400">
+                  <label className="mb-1 flex items-center text-[10px] font-semibold uppercase [color:var(--cl-ink-3)]">
                     Description <FlagDot verified={line.description.verified} />
                   </label>
                   <input
@@ -284,7 +284,7 @@ export function DaybookDraftReview({
                     removeLine(line.key)
                   }}
                   aria-label="Remove line"
-                  className="mt-4 shrink-0 text-slate-400 hover:text-red-600"
+                  className="mt-4 shrink-0 [color:var(--cl-ink-3)] hover:text-red-600"
                 >
                   <TrashIcon className="h-4 w-4" />
                 </button>
@@ -298,7 +298,7 @@ export function DaybookDraftReview({
 
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <div>
-                  <label className="mb-1 flex items-center text-[10px] font-semibold uppercase text-slate-400">
+                  <label className="mb-1 flex items-center text-[10px] font-semibold uppercase [color:var(--cl-ink-3)]">
                     LRD <FlagDot verified={line.lrdAmount.verified} />
                   </label>
                   <input
@@ -313,7 +313,7 @@ export function DaybookDraftReview({
                   />
                 </div>
                 <div>
-                  <label className="mb-1 flex items-center text-[10px] font-semibold uppercase text-slate-400">
+                  <label className="mb-1 flex items-center text-[10px] font-semibold uppercase [color:var(--cl-ink-3)]">
                     USD <FlagDot verified={line.usdAmount.verified} />
                   </label>
                   <input
@@ -330,11 +330,11 @@ export function DaybookDraftReview({
               </div>
             </div>
           ))}
-          {draft.lines.length === 0 && <p className="text-sm text-slate-500">No line items detected — add them manually in Record Sale instead.</p>}
+          {draft.lines.length === 0 && <p className="text-sm [color:var(--cl-ink-2)]">No line items detected — add them manually in Record Sale instead.</p>}
         </div>
 
-        <div className="rounded-xl border border-slate-100 p-3">
-          <h2 className="mb-2 text-sm font-semibold text-slate-900">Closing totals</h2>
+        <div className="rounded-xl border [border-color:var(--cl-line)] p-3">
+          <h2 className="mb-2 text-sm font-semibold [color:var(--cl-ink)]">Closing totals</h2>
           <div className="grid grid-cols-2 gap-3">
             {(
               [
@@ -347,7 +347,7 @@ export function DaybookDraftReview({
               ] as [keyof DaybookDraft['totals'], string][]
             ).map(([key, label]) => (
               <div key={key}>
-                <label className="mb-1 flex items-center text-[10px] font-semibold uppercase text-slate-400">
+                <label className="mb-1 flex items-center text-[10px] font-semibold uppercase [color:var(--cl-ink-3)]">
                   {label} <FlagDot verified={draft.totals[key].verified} />
                 </label>
                 <input
@@ -365,7 +365,7 @@ export function DaybookDraftReview({
         </div>
       </div>
 
-      <div className="sticky bottom-0 flex shrink-0 flex-col gap-2 border-t border-slate-100 bg-white px-4 py-3 sm:absolute sm:inset-x-0 sm:bottom-0">
+      <div className="sticky bottom-0 flex shrink-0 flex-col gap-2 border-t [border-color:var(--cl-line)] [background:var(--cl-card)] px-4 py-3 sm:absolute sm:inset-x-0 sm:bottom-0">
         <button
           onClick={onApprove}
           disabled={approving || draft.lines.length === 0}
@@ -373,7 +373,7 @@ export function DaybookDraftReview({
         >
           {approving ? 'Pushing…' : 'Approve & Push to Ledger'}
         </button>
-        <button onClick={onDiscard} disabled={approving} className="w-full text-sm font-medium text-slate-500">
+        <button onClick={onDiscard} disabled={approving} className="w-full text-sm font-medium [color:var(--cl-ink-2)]">
           Discard scan
         </button>
       </div>

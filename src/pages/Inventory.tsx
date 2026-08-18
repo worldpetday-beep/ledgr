@@ -30,7 +30,6 @@ import { isLowStock, selectOnFocus, variantDisplayLabel } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
 import { familySortKey } from '../lib/itemMatch'
 import { reorderVariantLabel, guessCategory } from '../lib/catalogCleanup'
-import { useAppActions } from '../context/AppActions'
 import { format } from 'date-fns'
 
 // Missing cost = never entered (costUnknown) OR left at a literal zero,
@@ -83,12 +82,12 @@ function EditableCell({ label, value, onCommit }: { label: string; value: number
 
   return (
     <div className="flex w-20 shrink-0 flex-col gap-0.5">
-      <span className="text-[9px] font-semibold uppercase tracking-wide text-gray-400">{label}</span>
+      <span className="text-[9px] font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">{label}</span>
       <input
         type="number"
         inputMode="decimal"
         step="0.01"
-        className="tabular w-full rounded-md border border-gray-200 bg-gray-50 px-1.5 py-1 text-sm font-medium text-black outline-none focus:border-black"
+        className="tabular w-full rounded-md border [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-1.5 py-1 text-sm font-medium [color:var(--cl-ink)] outline-none focus:[border-color:var(--cl-amber)]"
         value={text}
         onFocus={selectOnFocus}
         onChange={(e) => setText(e.target.value)}
@@ -116,20 +115,20 @@ function StockStepper({ value, onCommit }: { value: number; onCommit: (n: number
 
   return (
     <div className="flex w-28 shrink-0 flex-col gap-0.5">
-      <span className="text-[9px] font-semibold uppercase tracking-wide text-gray-400">Stock Left</span>
+      <span className="text-[9px] font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Stock Left</span>
       <div className="flex items-center gap-1">
         <button
           type="button"
           onClick={() => step(-1)}
           aria-label="Decrease stock"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-sm font-bold leading-none text-gray-600"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border [border-color:var(--cl-line)] [background:var(--cl-line-2)] text-sm font-bold leading-none [color:var(--cl-ink-2)]"
         >
           −
         </button>
         <input
           type="number"
           inputMode="numeric"
-          className="tabular w-10 shrink-0 rounded-md border border-gray-200 bg-gray-50 px-1 py-1 text-center text-sm font-medium text-black outline-none focus:border-black"
+          className="tabular w-10 shrink-0 rounded-md border [border-color:var(--cl-line)] [background:var(--cl-line-2)] px-1 py-1 text-center text-sm font-medium [color:var(--cl-ink)] outline-none focus:[border-color:var(--cl-amber)]"
           value={text}
           onFocus={selectOnFocus}
           onChange={(e) => setText(e.target.value)}
@@ -139,7 +138,7 @@ function StockStepper({ value, onCommit }: { value: number; onCommit: (n: number
           type="button"
           onClick={() => step(1)}
           aria-label="Increase stock"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-sm font-bold leading-none text-gray-600"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border [border-color:var(--cl-line)] [background:var(--cl-line-2)] text-sm font-bold leading-none [color:var(--cl-ink-2)]"
         >
           +
         </button>
@@ -173,7 +172,7 @@ function EditableTitle({ value, productName, onCommit }: { value: string; produc
       <input
         autoFocus
         onFocus={selectOnFocus}
-        className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-1.5 py-1 text-sm text-gray-900 outline-none"
+        className="min-w-0 flex-1 rounded-md border [border-color:var(--cl-line)] [background:var(--cl-card)] px-1.5 py-1 text-sm [color:var(--cl-ink)] outline-none"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
@@ -188,8 +187,8 @@ function EditableTitle({ value, productName, onCommit }: { value: string; produc
       onClick={() => setEditing(true)}
       className="flex min-w-0 flex-1 items-start gap-1.5 rounded-md px-1 py-0.5 text-left"
     >
-      <span className="min-w-0 flex-1 line-clamp-2 text-sm text-gray-700">{variantDisplayLabel(productName, value)}</span>
-      <EditIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-300" />
+      <span className="min-w-0 flex-1 line-clamp-2 text-sm [color:var(--cl-ink)]">{variantDisplayLabel(productName, value)}</span>
+      <EditIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 [color:var(--cl-ink-3)]" />
     </button>
   )
 }
@@ -287,19 +286,19 @@ function ProductHierarchyTable({
         const isAccordion = variants.length > 1
         const expanded = !isAccordion || expandedIds.has(product.id!)
         return (
-          <div key={product.id} className="overflow-hidden rounded-xl border border-gray-100">
+          <div key={product.id} className="overflow-hidden rounded-xl border [border-color:var(--cl-line)]">
             {/* Parent row -- a plain div (not a <button>) since it hosts
                 three independently-clickable real <button>s (checkbox,
                 name/detail, chevron); nesting a <button> inside another
                 <button> would be invalid HTML. The checkbox is always
                 present -- selection isn't gated behind a separate "select
                 mode" toggle. */}
-            <div className="flex w-full items-start gap-2.5 bg-gray-50 px-3 py-2.5 text-left">
+            <div className="flex w-full items-start gap-2.5 [background:var(--cl-line-2)] px-3 py-2.5 text-left">
               <button
                 onClick={() => onToggleSelected(product.id!)}
                 aria-label={selected ? 'Deselect item' : 'Select item'}
                 className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
-                  selected ? 'border-black bg-black text-white' : 'border-gray-300'
+                  selected ? 'border-black [background:var(--cl-ink)] text-white' : '[border-color:var(--cl-line)]'
                 }`}
               >
                 {selected && <CheckSquareIcon className="h-3.5 w-3.5" />}
@@ -308,15 +307,15 @@ function ProductHierarchyTable({
                 onClick={() => onTapProduct(product.id!)}
                 className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
               >
-                <ItemThumb image={product.images[0]} size={32} className="!rounded-md !bg-gray-200 !text-gray-400" />
-                <span className="min-w-0 flex-1 line-clamp-2 text-sm font-bold leading-snug text-black">{product.name}</span>
+                <ItemThumb image={product.images[0]} size={32} className="!rounded-md ![background:var(--cl-line)] ![color:var(--cl-ink-3)]" />
+                <span className="min-w-0 flex-1 line-clamp-2 text-sm font-bold leading-snug [color:var(--cl-ink)]">{product.name}</span>
               </button>
               {isAccordion && (
                 <button
                   type="button"
                   aria-label={expanded ? 'Collapse variants' : 'Expand variants'}
                   onClick={() => toggleExpanded(product.id!)}
-                  className="mt-0.5 shrink-0 rounded-full p-1 text-gray-400 hover:bg-gray-100"
+                  className="mt-0.5 shrink-0 rounded-full p-1 [color:var(--cl-ink-3)] hover:[background:var(--cl-line-2)]"
                 >
                   <ChevronRightIcon className={`h-4 w-4 transition-transform ${expanded ? 'rotate-90' : ''}`} />
                 </button>
@@ -330,8 +329,8 @@ function ProductHierarchyTable({
                 and Stock Left right beside them, instead of every row
                 always reserving a full second line it doesn't need). */}
             {expanded && variants.map((v) => (
-              <div key={v.id} className="flex items-center gap-2 border-t border-gray-50 py-1.5 pl-3 pr-3">
-                <span className="h-6 w-3 shrink-0 self-stretch border-l-2 border-gray-200" />
+              <div key={v.id} className="flex items-center gap-2 border-t [border-color:var(--cl-line-2)] py-1.5 pl-3 pr-3">
+                <span className="h-6 w-3 shrink-0 self-stretch border-l-2 [border-color:var(--cl-line)]" />
                 <EditableTitle value={v.label} productName={product.name} onCommit={(next) => commitTitle(v, next)} />
                 {isRecentlyNew(v) && (
                   <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700">
@@ -344,7 +343,7 @@ function ProductHierarchyTable({
                 </div>
               </div>
             ))}
-            {variants.length === 0 && <p className="border-t border-gray-50 px-3 py-2 text-xs text-gray-400">No variants yet.</p>}
+            {variants.length === 0 && <p className="border-t [border-color:var(--cl-line-2)] px-3 py-2 text-xs [color:var(--cl-ink-3)]">No variants yet.</p>}
           </div>
         )
       })}
@@ -353,7 +352,6 @@ function ProductHierarchyTable({
 }
 
 export default function Inventory() {
-  const { addProductSignal } = useAppActions()
   const products = useLiveQuery(() => db.products.toArray(), [])
   const allVariants = useLiveQuery(() => db.variants.toArray(), [])
   const categories = useLiveQuery(() => db.categories.toArray(), [])
@@ -395,14 +393,6 @@ export default function Inventory() {
   const [transferQty, setTransferQty] = useState<number>(0)
   const [transferDate, setTransferDate] = useState(() => format(Date.now(), 'yyyy-MM-dd'))
   const [transferError, setTransferError] = useState<string | null>(null)
-
-  // The global FAB opens this screen's own "add product" editor instead of
-  // Record Sale while the Products/Inventory tab is active (App.tsx bumps
-  // this signal on every tap).
-  useEffect(() => {
-    if (addProductSignal > 0) setDetailProductId('new')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addProductSignal])
 
   const recentTransfers = useLiveQuery(
     () => db.stockTransfers.orderBy('createdAt').reverse().limit(10).toArray(),
@@ -764,7 +754,7 @@ export default function Inventory() {
 
   return (
     <ShopifyShell
-      title="Products"
+      title="Stock"
       headerRight={
         <>
           <ShopifyHeaderIconButton onClick={() => setDetailProductId('new')} label="Add product">
@@ -782,10 +772,10 @@ export default function Inventory() {
             mode" toggle. Wraps to two lines on narrow phones since cramming
             all three into one literal row would clip on a 390px screen,
             but it's one cohesive block. */}
-        <div className="flex flex-col gap-2 rounded-xl border border-gray-100 bg-gray-50 p-2">
+        <div className="flex flex-col gap-2 rounded-xl border [border-color:var(--cl-line)] [background:var(--cl-line-2)] p-2">
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 [color:var(--cl-ink-3)]" />
               <input
                 className={shopifyInputClass + ' pl-9'}
                 placeholder="Search by product, variant, or SKU"
@@ -804,22 +794,22 @@ export default function Inventory() {
             <button
               onClick={selectFiltered}
               disabled={!query.trim()}
-              className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-black disabled:opacity-30"
+              className="flex-1 rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-card)] px-3 py-1.5 text-sm font-semibold [color:var(--cl-ink)] disabled:opacity-30"
             >
               Select Filtered{query.trim() ? ` (${filtered.length})` : ''}
             </button>
             <button
               onClick={() => setGroupSheetOpen(true)}
               disabled={selectedIds.size === 0}
-              className="shrink-0 rounded-lg bg-black px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-30"
+              className="shrink-0 rounded-lg [background:var(--cl-ink)] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-30"
             >
               Move to…
             </button>
           </div>
           {selectedIds.size > 0 && (
             <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="font-medium text-gray-700">{selectedIds.size} selected</span>
-              <button onClick={clearSelection} className="font-medium text-gray-500">Clear</button>
+              <span className="font-medium [color:var(--cl-ink)]">{selectedIds.size} selected</span>
+              <button onClick={clearSelection} className="font-medium [color:var(--cl-ink-2)]">Clear</button>
             </div>
           )}
         </div>
@@ -828,13 +818,13 @@ export default function Inventory() {
             same filtered catalog flattened to one row per variant, grouped
             by category and alphabetized by product -- "labeled and ordered
             by the product" for fast scanning instead of a nested tree. */}
-        <div className="flex rounded-lg bg-gray-100 p-1">
+        <div className="flex rounded-lg [background:var(--cl-line-2)] p-1">
           {(['products', 'sku'] as const).map((mode) => (
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
               className={`flex-1 rounded-md py-1.5 text-sm font-semibold transition-colors ${
-                viewMode === mode ? 'bg-white text-black shadow-sm' : 'text-gray-500'
+                viewMode === mode ? '[background:var(--cl-card)] [color:var(--cl-ink)] shadow-sm' : '[color:var(--cl-ink-2)]'
               }`}
             >
               {mode === 'products' ? 'Products' : 'SKU'}
@@ -864,10 +854,10 @@ export default function Inventory() {
               {visibleDuplicateGroups.length} possible duplicate/same-family item{visibleDuplicateGroups.length === 1 ? '' : 's'} found
             </span>
             {visibleDuplicateGroups.map((group) => (
-              <div key={familySortKey(group[0].name)} className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5">
-                <span className="min-w-0 truncate text-xs text-gray-700">{group.map((p) => p.name).join('  ·  ')}</span>
+              <div key={familySortKey(group[0].name)} className="flex items-center justify-between gap-2 rounded-lg [background:var(--cl-card)] px-2.5 py-1.5">
+                <span className="min-w-0 truncate text-xs [color:var(--cl-ink)]">{group.map((p) => p.name).join('  ·  ')}</span>
                 <div className="flex shrink-0 items-center gap-2">
-                  <button onClick={() => dismissDuplicateGroup(group)} className="text-xs font-medium text-gray-400">
+                  <button onClick={() => dismissDuplicateGroup(group)} className="text-xs font-medium [color:var(--cl-ink-3)]">
                     Dismiss
                   </button>
                   <button onClick={() => reviewDuplicateGroup(group)} className="text-xs font-semibold text-amber-700">
@@ -890,7 +880,7 @@ export default function Inventory() {
               autoExpandId={lastLinkedProductId}
             />
             {activeList.length === 0 && deadStockList.length === 0 && (
-              <p className="py-10 text-center text-sm text-gray-500">No products match. Tap + above to add one.</p>
+              <p className="py-10 text-center text-sm [color:var(--cl-ink-2)]">No products match. Tap + above to add one.</p>
             )}
 
             {/* Dead Stock drawer -- only rendered while isolating, collapsed
@@ -924,20 +914,20 @@ export default function Inventory() {
           <div className="flex flex-col gap-4">
             {skuGroups.map(([category, rows]) => (
               <div key={category}>
-                <div className="mb-1.5 px-1 text-xs font-bold uppercase tracking-wide text-gray-400">
+                <div className="mb-1.5 px-1 text-xs font-bold uppercase tracking-wide [color:var(--cl-ink-3)]">
                   {category} ({rows.length})
                 </div>
-                <div className="overflow-hidden rounded-xl border border-gray-100">
+                <div className="overflow-hidden rounded-xl border [border-color:var(--cl-line)]">
                   {rows.map((row, i) => (
                     <button
                       key={`${row.productId}-${row.variant.id}`}
                       onClick={() => setDetailProductId(row.productId)}
-                      className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left ${i > 0 ? 'border-t border-gray-50' : ''}`}
+                      className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left ${i > 0 ? 'border-t [border-color:var(--cl-line-2)]' : ''}`}
                     >
-                      <span className="min-w-0 flex-1 line-clamp-2 text-sm font-medium text-black">
+                      <span className="min-w-0 flex-1 line-clamp-2 text-sm font-medium [color:var(--cl-ink)]">
                         {skuRowLabel(row.productName, row.variant.label)}
                       </span>
-                      <span className="tabular shrink-0 text-xs text-gray-500">
+                      <span className="tabular shrink-0 text-xs [color:var(--cl-ink-2)]">
                         {row.variant.stockMyShop + row.variant.stockVishalShop} left
                       </span>
                     </button>
@@ -945,15 +935,15 @@ export default function Inventory() {
                 </div>
               </div>
             ))}
-            {skuRowCount === 0 && <p className="py-10 text-center text-sm text-gray-500">No products match.</p>}
+            {skuRowCount === 0 && <p className="py-10 text-center text-sm [color:var(--cl-ink-2)]">No products match.</p>}
           </div>
         )}
       </div>
 
       {/* Sort by */}
-      <BottomSheet open={sortSheetOpen} onClose={() => setSortSheetOpen(false)} contentClassName="!bg-white !text-black">
+      <BottomSheet open={sortSheetOpen} onClose={() => setSortSheetOpen(false)} contentClassName="![background:var(--cl-card)] ![color:var(--cl-ink)]">
         <div className="flex flex-col gap-1 pt-2">
-          <h2 className="px-1 pb-2 text-sm font-semibold text-gray-500">Sort by</h2>
+          <h2 className="px-1 pb-2 text-sm font-semibold [color:var(--cl-ink-2)]">Sort by</h2>
           {SORT_OPTIONS.map((opt) => (
             <button
               key={opt.value}
@@ -961,7 +951,7 @@ export default function Inventory() {
                 setSortBy(opt.value)
                 setSortSheetOpen(false)
               }}
-              className="flex items-center justify-between rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+              className="flex items-center justify-between rounded-lg px-3 py-3 text-left text-sm font-medium [color:var(--cl-ink)] hover:[background:var(--cl-line-2)]"
             >
               {opt.label}
               {sortBy === opt.value && <span>✓</span>}
@@ -971,12 +961,12 @@ export default function Inventory() {
       </BottomSheet>
 
       {/* Filter by */}
-      <BottomSheet open={filterSheetOpen} onClose={() => setFilterSheetOpen(false)} contentClassName="!bg-white !text-black">
+      <BottomSheet open={filterSheetOpen} onClose={() => setFilterSheetOpen(false)} contentClassName="![background:var(--cl-card)] ![color:var(--cl-ink)]">
         <div className="flex flex-col gap-4 pt-2">
-          <h2 className="px-1 text-sm font-semibold text-gray-500">Filter by</h2>
+          <h2 className="px-1 text-sm font-semibold [color:var(--cl-ink-2)]">Filter by</h2>
 
           <div>
-            <div className="mb-1.5 px-1 text-xs font-semibold uppercase tracking-wide text-gray-400">Category</div>
+            <div className="mb-1.5 px-1 text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Category</div>
             <div className="flex flex-wrap gap-1.5">
               <button onClick={() => setCategoryFilter('All')} className={shopifyChipClass(categoryFilter === 'All')}>All</button>
               {allCategories.map((c) => (
@@ -986,7 +976,7 @@ export default function Inventory() {
           </div>
 
           <div>
-            <div className="mb-1.5 px-1 text-xs font-semibold uppercase tracking-wide text-gray-400">Source location</div>
+            <div className="mb-1.5 px-1 text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Source location</div>
             <div className="flex flex-wrap gap-1.5">
               {(['all', 'storeFloor', 'warehouse'] as SourceLocationFilter[]).map((v) => (
                 <button key={v} onClick={() => setSourceLocationFilter(v)} className={shopifyChipClass(sourceLocationFilter === v)}>
@@ -997,7 +987,7 @@ export default function Inventory() {
           </div>
 
           <div>
-            <div className="mb-1.5 px-1 text-xs font-semibold uppercase tracking-wide text-gray-400">Price baseline</div>
+            <div className="mb-1.5 px-1 text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Price baseline</div>
             <div className="flex flex-wrap gap-1.5">
               {(['all', 'missingSP', 'missingCP'] as PriceBaselineFilter[]).map((v) => (
                 <button key={v} onClick={() => setPriceBaselineFilter(v)} className={shopifyChipClass(priceBaselineFilter === v)}>
@@ -1014,11 +1004,11 @@ export default function Inventory() {
                 setSourceLocationFilter('all')
                 setPriceBaselineFilter('all')
               }}
-              className="text-sm font-medium text-gray-500"
+              className="text-sm font-medium [color:var(--cl-ink-2)]"
             >
               Clear all
             </button>
-            <button onClick={() => setFilterSheetOpen(false)} className="rounded-lg bg-black px-4 py-2 text-sm font-semibold text-white">
+            <button onClick={() => setFilterSheetOpen(false)} className="rounded-lg [background:var(--cl-ink)] px-4 py-2 text-sm font-semibold text-white">
               Done
             </button>
           </div>
@@ -1026,17 +1016,17 @@ export default function Inventory() {
       </BottomSheet>
 
       {/* More options (⋮) */}
-      <BottomSheet open={moreMenuOpen} onClose={() => setMoreMenuOpen(false)} contentClassName="!bg-white !text-black">
+      <BottomSheet open={moreMenuOpen} onClose={() => setMoreMenuOpen(false)} contentClassName="![background:var(--cl-card)] ![color:var(--cl-ink)]">
         <div className="flex flex-col gap-1 pt-2">
-          <h2 className="px-1 pb-2 text-sm font-semibold text-gray-500">More options</h2>
+          <h2 className="px-1 pb-2 text-sm font-semibold [color:var(--cl-ink-2)]">More options</h2>
           <button
             onClick={() => {
               setMoreMenuOpen(false)
               setTransferSheetOpen(true)
             }}
-            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium [color:var(--cl-ink)] hover:[background:var(--cl-line-2)]"
           >
-            <BoxesIcon className="h-5 w-5 text-gray-500" />
+            <BoxesIcon className="h-5 w-5 [color:var(--cl-ink-2)]" />
             Warehouse Book (Vishal)
           </button>
           <button
@@ -1044,9 +1034,9 @@ export default function Inventory() {
               setMoreMenuOpen(false)
               setWarehouseLogOpen(true)
             }}
-            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium [color:var(--cl-ink)] hover:[background:var(--cl-line-2)]"
           >
-            <BoxesIcon className="h-5 w-5 text-gray-500" />
+            <BoxesIcon className="h-5 w-5 [color:var(--cl-ink-2)]" />
             Warehouse Log Ledger
           </button>
           <button
@@ -1054,9 +1044,9 @@ export default function Inventory() {
               setMoreMenuOpen(false)
               setFillCostsOpen(true)
             }}
-            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium [color:var(--cl-ink)] hover:[background:var(--cl-line-2)]"
           >
-            <SettingsIcon className="h-5 w-5 text-gray-500" />
+            <SettingsIcon className="h-5 w-5 [color:var(--cl-ink-2)]" />
             Fill Missing Costs
           </button>
           <button
@@ -1064,9 +1054,9 @@ export default function Inventory() {
               setMoreMenuOpen(false)
               openUnitsEditor(categoryFilter !== 'All' ? categoryFilter : allCategories[0])
             }}
-            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium [color:var(--cl-ink)] hover:[background:var(--cl-line-2)]"
           >
-            <SettingsIcon className="h-5 w-5 text-gray-500" />
+            <SettingsIcon className="h-5 w-5 [color:var(--cl-ink-2)]" />
             Units per category
           </button>
           <button
@@ -1074,9 +1064,9 @@ export default function Inventory() {
               setMoreMenuOpen(false)
               cleanUpCatalog()
             }}
-            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-black hover:bg-gray-50"
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium [color:var(--cl-ink)] hover:[background:var(--cl-line-2)]"
           >
-            <EditIcon className="h-5 w-5 text-gray-500" />
+            <EditIcon className="h-5 w-5 [color:var(--cl-ink-2)]" />
             Clean up variant names &amp; categories
           </button>
         </div>
@@ -1186,10 +1176,10 @@ export default function Inventory() {
 
       {/* Move selected items to a parent product -- either an existing
           family (Mattress, Generators, Zincs, …) or a brand-new one. */}
-      <BottomSheet open={groupSheetOpen} onClose={() => setGroupSheetOpen(false)} contentClassName="!bg-white !text-black">
+      <BottomSheet open={groupSheetOpen} onClose={() => setGroupSheetOpen(false)} contentClassName="![background:var(--cl-card)] ![color:var(--cl-ink)]">
         <div className="flex flex-col gap-3 pt-2">
           <h2 className="text-base font-semibold">Move {selectedIds.size} item{selectedIds.size === 1 ? '' : 's'} to…</h2>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs [color:var(--cl-ink-2)]">
             Each selected item becomes its own variant under the product you pick — nothing is deleted, just reorganized.
           </p>
 
@@ -1219,7 +1209,7 @@ export default function Inventory() {
                 value={groupTargetQuery}
                 onChange={(e) => setGroupTargetQuery(e.target.value)}
               />
-              <div className="max-h-48 overflow-y-auto rounded-lg border border-gray-100">
+              <div className="max-h-48 overflow-y-auto rounded-lg border [border-color:var(--cl-line)]">
                 {(products ?? [])
                   .filter((p) => !selectedIds.has(p.id!) && p.name.toLowerCase().includes(groupTargetQuery.toLowerCase()))
                   .slice(0, 20)
@@ -1228,7 +1218,7 @@ export default function Inventory() {
                       key={p.id}
                       onClick={() => setGroupTarget(p.id!)}
                       className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm ${
-                        groupTarget === p.id ? 'bg-gray-100 font-medium' : ''
+                        groupTarget === p.id ? '[background:var(--cl-line-2)] font-medium' : ''
                       }`}
                     >
                       {p.name}
@@ -1241,7 +1231,7 @@ export default function Inventory() {
           <button
             onClick={mergeSelectedIntoGroup}
             disabled={groupTarget === 'new' ? !groupNewName.trim() : typeof groupTarget !== 'number' || groupTarget < 0}
-            className="mt-1 w-full rounded-lg bg-black py-2.5 text-sm font-semibold text-white disabled:opacity-30"
+            className="mt-1 w-full rounded-lg [background:var(--cl-ink)] py-2.5 text-sm font-semibold text-white disabled:opacity-30"
           >
             Move items
           </button>

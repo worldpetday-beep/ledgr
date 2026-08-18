@@ -63,20 +63,20 @@ export function ProductDetailView({ productId, onClose }: { productId: number; o
 
   if (!product || !variants) {
     return (
-      <div className="fixed inset-0 z-50 flex flex-col bg-white text-black">
+      <div className="fixed inset-0 z-50 flex flex-col [background:var(--cl-card)] [color:var(--cl-ink)]">
         <PDHeader title="Product" onBack={onClose} />
-        <div className="flex flex-1 items-center justify-center text-sm text-gray-400">Loading…</div>
+        <div className="flex flex-1 items-center justify-center text-sm [color:var(--cl-ink-3)]">Loading…</div>
       </div>
     )
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-gray-100 text-black">
+    <div className="fixed inset-0 z-50 flex flex-col [background:var(--cl-line-2)] [color:var(--cl-ink)]">
       <PDHeader
         title={product.name}
         onBack={onClose}
         right={
-          <button onClick={() => setMenuOpen(true)} aria-label="More options" className="flex h-9 w-9 items-center justify-center rounded-full text-black hover:bg-gray-100">
+          <button onClick={() => setMenuOpen(true)} aria-label="More options" className="flex h-9 w-9 items-center justify-center rounded-full [color:var(--cl-ink)] hover:[background:var(--cl-line-2)]">
             <MoreVerticalIcon className="h-5 w-5" />
           </button>
         }
@@ -87,10 +87,10 @@ export function ProductDetailView({ productId, onClose }: { productId: number; o
             single toggle). */}
         <PDCard onClick={toggleArchived}>
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-gray-500">Product status</span>
+            <span className="text-sm font-medium [color:var(--cl-ink-2)]">Product status</span>
             <span
               className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                product.archived ? 'bg-gray-100 text-gray-600' : 'bg-green-100 text-green-700'
+                product.archived ? '[background:var(--cl-line-2)] [color:var(--cl-ink-2)]' : 'bg-green-100 text-green-700'
               }`}
             >
               {product.archived ? 'Archived' : 'Active'}
@@ -103,51 +103,51 @@ export function ProductDetailView({ productId, onClose }: { productId: number; o
           {product.images.length > 0 ? (
             <div className="flex gap-2 overflow-x-auto pt-1">
               {product.images.slice(0, 4).map((img, i) => (
-                <ItemThumb key={i} image={img} size={84} className="!rounded-lg !bg-gray-100" />
+                <ItemThumb key={i} image={img} size={84} className="!rounded-lg ![background:var(--cl-line-2)]" />
               ))}
             </div>
           ) : (
-            <p className="text-sm text-gray-400">No photos yet.</p>
+            <p className="text-sm [color:var(--cl-ink-3)]">No photos yet.</p>
           )}
         </PDCard>
 
         {/* Title / description / category */}
         <PDCard onClick={() => setSubScreen('details')}>
           <div className="flex items-start justify-between gap-2">
-            <span className="text-lg font-semibold leading-snug text-black">{product.name}</span>
-            <ChevronRightIcon className="mt-1 h-4 w-4 shrink-0 text-gray-300" />
+            <span className="text-lg font-semibold leading-snug [color:var(--cl-ink)]">{product.name}</span>
+            <ChevronRightIcon className="mt-1 h-4 w-4 shrink-0 [color:var(--cl-ink-3)]" />
           </div>
-          {product.description && <p className="line-clamp-2 text-sm text-gray-500">{product.description}</p>}
-          <div className="mt-1 text-sm text-gray-500">{product.category}</div>
+          {product.description && <p className="line-clamp-2 text-sm [color:var(--cl-ink-2)]">{product.description}</p>}
+          <div className="mt-1 text-sm [color:var(--cl-ink-2)]">{product.category}</div>
         </PDCard>
 
         {/* Price */}
         <PDCard onClick={() => setSubScreen('price')} title="Pricing" chevron>
           {priceRange ? (
-            <span className="tabular text-base font-semibold text-black">
+            <span className="tabular text-base font-semibold [color:var(--cl-ink)]">
               {priceRange.min === priceRange.max
                 ? money(priceRange.min, priceRange.currency)
                 : `${money(priceRange.min, priceRange.currency)} — ${money(priceRange.max, priceRange.currency)}`}
             </span>
           ) : (
-            <span className="text-sm text-gray-400">No variants yet</span>
+            <span className="text-sm [color:var(--cl-ink-3)]">No variants yet</span>
           )}
         </PDCard>
 
         {/* Options */}
         <PDCard onClick={() => setSubScreen('options')} title="Options" actionLabel={product.options.length ? 'Edit' : 'Add options'}>
           {product.options.length === 0 ? (
-            <p className="text-sm text-gray-400">No options — single variant product.</p>
+            <p className="text-sm [color:var(--cl-ink-3)]">No options — single variant product.</p>
           ) : (
             <div className="flex flex-col gap-2">
               {product.options.map((o) => (
                 <div key={o.name}>
-                  <div className="text-xs font-semibold text-gray-400">
+                  <div className="text-xs font-semibold [color:var(--cl-ink-3)]">
                     {o.name} ({o.values.length})
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {o.values.map((v) => (
-                      <span key={v} className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
+                      <span key={v} className="rounded-full [background:var(--cl-line-2)] px-2.5 py-1 text-xs font-medium [color:var(--cl-ink)]">
                         {v}
                       </span>
                     ))}
@@ -161,13 +161,13 @@ export function ProductDetailView({ productId, onClose }: { productId: number; o
         {/* Variants */}
         <PDCard onClick={() => setSubScreen('variants')} title="Variants" chevron>
           <div className="flex items-center gap-2.5">
-            <ItemThumb image={product.images[0]} size={36} className="!rounded-lg !bg-gray-100" />
+            <ItemThumb image={product.images[0]} size={36} className="!rounded-lg ![background:var(--cl-line-2)]" />
             <div>
-              <div className="text-sm font-medium text-black">
+              <div className="text-sm font-medium [color:var(--cl-ink)]">
                 {variants.length} variant{variants.length === 1 ? '' : 's'}
               </div>
               {product.options.length > 0 && (
-                <div className="text-xs text-gray-500">
+                <div className="text-xs [color:var(--cl-ink-2)]">
                   From {product.options.length} option{product.options.length === 1 ? '' : 's'}
                 </div>
               )}
@@ -178,8 +178,8 @@ export function ProductDetailView({ productId, onClose }: { productId: number; o
         {/* Inventory */}
         <PDCard onClick={() => setSubScreen('inventory')} title="Inventory" chevron>
           <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-500">Total available</span>
-            <span className="tabular font-semibold text-black">{totalStock}</span>
+            <span className="[color:var(--cl-ink-2)]">Total available</span>
+            <span className="tabular font-semibold [color:var(--cl-ink)]">{totalStock}</span>
           </div>
         </PDCard>
 
@@ -189,21 +189,21 @@ export function ProductDetailView({ productId, onClose }: { productId: number; o
             with nothing behind them. */}
         <PDCard onClick={() => setSubScreen('details')} title="Organization">
           <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-500">Type</span>
-            <span className="font-medium text-black">{product.category}</span>
+            <span className="[color:var(--cl-ink-2)]">Type</span>
+            <span className="font-medium [color:var(--cl-ink)]">{product.category}</span>
           </div>
         </PDCard>
       </div>
 
-      <BottomSheet open={menuOpen} onClose={() => setMenuOpen(false)} contentClassName="!bg-white !text-black">
+      <BottomSheet open={menuOpen} onClose={() => setMenuOpen(false)} contentClassName="![background:var(--cl-card)] ![color:var(--cl-ink)]">
         <div className="flex flex-col gap-1 pt-2">
-          <h2 className="px-1 pb-2 text-sm font-semibold text-gray-500">More options</h2>
+          <h2 className="px-1 pb-2 text-sm font-semibold [color:var(--cl-ink-2)]">More options</h2>
           <button
             onClick={() => {
               setMenuOpen(false)
               removeProduct()
             }}
-            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-red-600 hover:bg-gray-50"
+            className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-red-600 hover:[background:var(--cl-line-2)]"
           >
             Delete product
           </button>

@@ -1,4 +1,37 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+
+/* Counter Ledger design system -- the app's one visual identity across all
+   five tabs (Sell/Book/Drawer/Stock/Numbers). Cream/ink/amber, Archivo for
+   UI text, IBM Plex Mono with tabular numerals for every money figure and
+   quantity. Amber is reserved for the active input target and the primary
+   action only -- never decoration. */
+:root {
+  --cl-bg: #fbf9f4;
+  --cl-card: #ffffff;
+  --cl-ink: #141b24;
+  --cl-ink-2: #5a6470;
+  --cl-ink-3: #9aa2ab;
+  --cl-line: #ece6da;
+  --cl-line-2: #f5f1e8;
+  --cl-amber: #f0a202;
+  --cl-amber-2: #c77f00;
+  --cl-usd: #17714b;
+  --cl-lrd: #1b4b85;
+  --cl-alarm: #b3341f;
+}
+
+.cl {
+  background: var(--cl-bg);
+  color: var(--cl-ink);
+  font-family: Archivo, system-ui, sans-serif;
+}
+
+.cl .m,
+.cl-m {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
 
 :root {
   --surface-1: #fcfcfb;
@@ -62,4 +95,5 @@ body {
 
 .tabular {
   font-variant-numeric: tabular-nums;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
 }
