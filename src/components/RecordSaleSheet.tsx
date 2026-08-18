@@ -15,7 +15,7 @@ import {
 import { BottomSheet, Button, Field, inputClass, Badge, Pill, Switch } from './ui'
 import { LedgerPushReviewPanel, RecentSalesReference, type TicketLineSummary } from './LedgerPushReviewPanel'
 import { SearchIcon, PlusIcon, TrashIcon, XIcon } from './icons'
-import { money, selectOnFocus, dateKeyMonrovia, variantDisplayLabel } from '../lib/format'
+import { money, selectOnFocus, dateKeyMonrovia, variantDisplayLabel, formatShortDateMonrovia } from '../lib/format'
 import { itemSearchMatches } from '../lib/itemMatch'
 import { withoutVoided } from '../lib/salesLedger'
 import {
@@ -636,6 +636,10 @@ export function RecordSaleSheet({
   const [totalUsd, setTotalUsd] = useState('')
   const [lastAddedKey, setLastAddedKey] = useState<string | null>(null)
   const [sameAsLast, setSameAsLast] = useState(false)
+  // Backdating a missed day -- the date button in the header turns amber
+  // whenever this isn't today; that's the only "late entry" affordance,
+  // no separate flag or mode to toggle.
+  const [saleDate, setSaleDate] = useState(() => dateKeyMonrovia(Date.now()))
   const [tbs, setTbs] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -1151,7 +1155,10 @@ export function RecordSaleSheet({
       await db.transaction('rw', db.sales, db.products, db.variants, db.settings, async () => {
         const customerNumber = sameAsLast && lastSale ? lastSale.customerNumber : await reserveNextCustomerNumber()
         const orderNumber = await reserveNextOrderNumber()
-        const timestamp = Date.now()
+        // Today keeps the real time-of-day; a backdated entry lands at noon
+        // on the picked date so it sorts sensibly within that day without
+        // claiming a specific (unknown) time it actually happened.
+        const timestamp = saleDate === dateKeyMonrovia(Date.now()) ? Date.now() : new Date(`${saleDate}T12:00:00`).getTime()
         await writeTicketLines(valid, !anyPerItemAmount, totalLrdNum, totalUsdNum, customerNumber, orderNumber, location, timestamp)
       })
     } catch (err) {
@@ -1173,11 +1180,30 @@ export function RecordSaleSheet({
       {/* The backdrop is locked (an accidental tap outside never closes this
           form) -- this is the one deliberate, explicit way to leave, and it
           always confirms first when there's anything typed to lose. */}
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between gap-2">
         <h2 className="text-base font-semibold text-[var(--text-primary)]">Record Sale</h2>
-        <button onClick={requestClose} aria-label="Close" className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-muted)] hover:bg-[var(--page-plane)]">
-          <XIcon className="h-4 w-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <label
+            className={`relative flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-semibold ${
+              saleDate === dateKeyMonrovia(Date.now())
+                ? 'border-[var(--border)] text-[var(--text-secondary)]'
+                : 'border-[var(--amber,#F0A202)] bg-[var(--amber,#F0A202)]/15 text-[var(--amber-2,#C77F00)]'
+            }`}
+          >
+            {saleDate === dateKeyMonrovia(Date.now()) ? 'Today' : formatShortDateMonrovia(new Date(`${saleDate}T12:00:00`).getTime())}
+            <input
+              type="date"
+              value={saleDate}
+              max={dateKeyMonrovia(Date.now())}
+              onChange={(e) => e.target.value && setSaleDate(e.target.value)}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              aria-label="Sale date"
+            />
+          </label>
+          <button onClick={requestClose} aria-label="Close" className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-muted)] hover:bg-[var(--page-plane)]">
+            <XIcon className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       <RecentSalesReference />
