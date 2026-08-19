@@ -17,6 +17,7 @@ import {
 import { ItemThumb } from '../components/ItemThumb'
 import { ProductDetailView } from '../components/ProductDetailView'
 import { AddProductFastEntryModal } from '../components/AddProductFastEntryModal'
+import { CatalogEntryCard } from '../components/CatalogEntryCard'
 import { WarehouseLogLedger } from '../components/WarehouseLogLedger'
 import { FillMissingCostsView } from '../components/FillMissingCostsView'
 import {
@@ -30,6 +31,7 @@ import { isLowStock, selectOnFocus, variantDisplayLabel } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
 import { familySortKey } from '../lib/itemMatch'
 import { reorderVariantLabel, guessCategory } from '../lib/catalogCleanup'
+import { guessUnit } from '../lib/unitGuess'
 import { format } from 'date-fns'
 
 // Missing cost = never entered (costUnknown) OR left at a literal zero,
@@ -832,6 +834,14 @@ export default function Inventory() {
           ))}
         </div>
 
+        <button
+          onClick={() => setDetailProductId('new')}
+          className="btn ghost"
+          style={{ borderRadius: 999, borderColor: 'var(--cl-line)', letterSpacing: '.02em' }}
+        >
+          + Add product or variant
+        </button>
+
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           {CHIPS.map((chip) => (
             <button key={chip.key} onClick={() => setActiveChip(chip.key)} className={shopifyChipClass(activeChip === chip.key)}>
@@ -917,20 +927,18 @@ export default function Inventory() {
                 <div className="mb-1.5 px-1 text-xs font-bold uppercase tracking-wide [color:var(--cl-ink-3)]">
                   {category} ({rows.length})
                 </div>
-                <div className="overflow-hidden rounded-xl border [border-color:var(--cl-line)]">
-                  {rows.map((row, i) => (
-                    <button
+                <div className="flex flex-col gap-2">
+                  {rows.map((row) => (
+                    <CatalogEntryCard
                       key={`${row.productId}-${row.variant.id}`}
+                      title={skuRowLabel(row.productName, row.variant.label)}
+                      cost={row.variant.costPrice}
+                      sell={row.variant.sellPrice}
+                      currency={row.variant.currency}
+                      unit={guessUnit(`${row.productName} ${row.variant.label}`, category)}
+                      qty={row.variant.stockMyShop + row.variant.stockVishalShop}
                       onClick={() => setDetailProductId(row.productId)}
-                      className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left ${i > 0 ? 'border-t [border-color:var(--cl-line-2)]' : ''}`}
-                    >
-                      <span className="min-w-0 flex-1 line-clamp-2 text-sm font-medium [color:var(--cl-ink)]">
-                        {skuRowLabel(row.productName, row.variant.label)}
-                      </span>
-                      <span className="tabular shrink-0 text-xs [color:var(--cl-ink-2)]">
-                        {row.variant.stockMyShop + row.variant.stockVishalShop} left
-                      </span>
-                    </button>
+                    />
                   ))}
                 </div>
               </div>

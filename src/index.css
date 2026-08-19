@@ -66,7 +66,7 @@
 .cl .row .nm { flex: 1 1 auto; min-width: 0; }
 .cl .row .nm b { display: block; font-size: 13.5px; font-weight: 700; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cl .row .nm small { font: 500 10.5px 'IBM Plex Mono', monospace; color: var(--cl-ink-3); }
-.cl .row .pr { flex: 0 0 auto; font: 700 14px 'IBM Plex Mono', monospace; color: var(--cl-usd); text-align: right; }
+.cl .row .pr { flex: 0 0 auto; font: 700 14px 'IBM Plex Mono', monospace; color: var(--cl-ink); text-align: right; }
 .cl .row .pr i { display: block; font: 500 9.5px Archivo, sans-serif; font-style: normal; color: var(--cl-ink-3); }
 .cl .row.new { background: #fffbf0; border-bottom: 0; }
 .cl .row.new b { color: var(--cl-amber-2); }

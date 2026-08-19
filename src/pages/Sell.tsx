@@ -14,9 +14,11 @@ import {
   type Variant,
 } from '../db'
 import { AddProductFastEntryModal } from '../components/AddProductFastEntryModal'
+import { CatalogEntryCard } from '../components/CatalogEntryCard'
 import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
 import { itemSearchMatches } from '../lib/itemMatch'
+import { guessUnit } from '../lib/unitGuess'
 
 interface Candidate {
   key: string
@@ -50,26 +52,6 @@ const DAY_MS = 86400000
 // "14G" alone is meaningless without "Zinc — " in front of it.
 function sellLabel(productName: string, variantLabel: string): string {
   return variantLabel === 'Standard' ? productName : `${productName} — ${variantLabel}`
-}
-
-// A word in the name wins over the category guess -- so "Zinc Gutter"
-// still guesses "Piece" even though the rest of the Zinc line sells by
-// the sheet/bundle. Same shape as the counter-ledger reference's own
-// guessUnit, just mapped onto this app's UNIT_TYPES vocabulary.
-const NAME_UNIT_HINTS: [RegExp, string][] = [
-  [/\b(wire|cable|hose|wallpaper|tape)\b/i, 'Roll'],
-  [/\b(gutter|barrow|tire|mirror|fan|lock|switch|socket|bulb|iron|kettle|stove|blender|flask|pump|generator|stabali[sz]er|panel box|breaker)\b/i, 'Piece'],
-  [/\b(zinc|sheet|ply|board)\b/i, 'Sheet'],
-  [/\b(paint|thinner)\b/i, 'Bucket'],
-  [/\b(cement|nail|screw|clip)\b/i, 'Pack'],
-  [/\b(tile|tiles)\b/i, 'Carton'],
-  [/\b(mattress|chair|table|freezer|refrigerator|tv|speaker)\b/i, 'Piece'],
-]
-function guessUnit(name: string, category: string): string {
-  for (const [re, u] of NAME_UNIT_HINTS) if (re.test(name)) return u
-  if (/roofing/i.test(category)) return 'Sheet'
-  if (/wire/i.test(category)) return 'Roll'
-  return 'Piece'
 }
 
 // The one screen that has to be fast: search is pinned under the header and
@@ -228,21 +210,22 @@ export default function Sell() {
           )}
 
           <p className="eb">{term ? 'Matches' : 'Most sold'}</p>
-          <div className="rows">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {results.map((c) => (
-              <button key={c.key} className="row" onClick={() => add(c)}>
-                <span className="nm">
-                  <b>{c.label}</b>
-                  <small>{c.variant.stockMyShop + c.variant.stockVishalShop} left · cost {money(c.variant.costPrice, c.variant.currency)}</small>
-                </span>
-                <span className="pr">{money(c.variant.sellPrice, c.variant.currency)}</span>
-              </button>
+              <CatalogEntryCard
+                key={c.key}
+                title={c.label}
+                cost={c.variant.costPrice}
+                sell={c.variant.sellPrice}
+                currency={c.variant.currency}
+                unit={guessUnit(`${c.product.name} ${c.variant.label}`, c.product.category)}
+                qty={c.variant.stockMyShop + c.variant.stockVishalShop}
+                onClick={() => add(c)}
+              />
             ))}
-            <button className="row new" onClick={() => setAdding(term)}>
-              <span className="nm">
-                <b>+ Add {term ? `"${term}"` : 'a new product'}</b>
-                <small>new item or another variant</small>
-              </span>
+            <button className="entry" style={{ width: '100%', textAlign: 'left' }} onClick={() => setAdding(term)}>
+              <b style={{ fontSize: 14, color: 'var(--cl-amber-2)' }}>+ Add {term ? `"${term}"` : 'a new product'}</b>
+              <div style={{ fontSize: 11, color: 'var(--cl-ink-3)', marginTop: 3 }}>new item or another variant</div>
             </button>
           </div>
         </div>
