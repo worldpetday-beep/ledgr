@@ -84,6 +84,12 @@ export interface Sale {
   // was paid in a single currency.
   secondaryAmount?: number
   secondaryCurrency?: Currency
+  // Exchange rate (LRD per USD) in effect when this line was recorded --
+  // lets the amount convert to the other currency correctly later even
+  // after the shop's rate setting changes, instead of re-pricing an old
+  // sale at today's rate. Absent on sales recorded before this field
+  // existed; callers fall back to the current rate for those.
+  rateAtSale?: number
   timestamp: number // epoch ms
   customerNumber: number // running ticket number, never resets, never reused
   customerName?: string // optional override label if the customer is known/renamed

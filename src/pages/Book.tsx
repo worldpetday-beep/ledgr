@@ -1,13 +1,25 @@
 import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useNavigate } from 'react-router-dom'
-import { db, type Sale } from '../db'
+import { db, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type Currency, type Sale } from '../db'
 import { EditIcon, SearchIcon, MoreVerticalIcon, BoxesIcon, ScanIcon } from '../components/icons'
 import { LedgerScanView } from '../components/LedgerScan'
 import { WarehouseLedgerView } from '../components/WarehouseLedger'
 import { InvoicePopup } from '../components/InvoicePopup'
-import { dateKeyMonrovia, formatShortDateMonrovia, formatTimeMonrovia } from '../lib/format'
+import { dateKeyMonrovia, formatShortDateMonrovia, formatTimeMonrovia, money } from '../lib/format'
 import { customerLabelOf, deleteSaleLine, markSalePickedUp, withoutVoided } from '../lib/salesLedger'
+
+// Converts an amount to the other currency using the rate that was in
+// effect when it was actually recorded (falls back to today's rate for
+// sales predating that field) -- never re-prices an old sale at today's
+// rate.
+function secondaryAmountOf(amount: number, currency: Currency, rateAtSale: number | undefined, currentRate: number) {
+  const rate = rateAtSale ?? currentRate
+  return currency === 'USD' ? amount * rate : amount / rate
+}
+function otherCurrency(c: Currency): Currency {
+  return c === 'USD' ? 'LRD' : 'USD'
+}
 
 type FilterTab = 'all' | 'tbs'
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -27,6 +39,8 @@ interface OrderGroup {
   lines: Sale[]
   anyTbs: boolean
   total: number
+  currency: Currency
+  rateAtSale?: number
 }
 
 // Sales grouped by day, newest first -- matches the reference Book screen:
@@ -49,6 +63,9 @@ export default function Book() {
 
   const allSalesRaw = useLiveQuery(() => db.sales.orderBy('timestamp').reverse().toArray(), [])
   const allSales = useMemo(() => withoutVoided(allSalesRaw ?? []), [allSalesRaw])
+  const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
+  const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
+  const [cardMenuFor, setCardMenuFor] = useState<number | null>(null)
 
   const orders = useMemo(() => {
     const map = new Map<number, Sale[]>()
@@ -65,6 +82,8 @@ export default function Book() {
       lines,
       anyTbs: lines.some((l) => l.tbs),
       total: lines.reduce((s, l) => s + l.soldFor + (l.secondaryAmount ?? 0), 0),
+      currency: lines[0].currency,
+      rateAtSale: lines[0].rateAtSale,
     }))
     groups.sort((a, b) => b.timestamp - a.timestamp)
     return groups
@@ -157,28 +176,79 @@ export default function Book() {
             </div>
           )}
 
-          {days.map(([key, ss]) => (
+          {days.map(([key, ss]) => {
+            const dayByCurrency = ss.reduce((acc, o) => {
+              acc[o.currency] = (acc[o.currency] ?? 0) + o.total
+              return acc
+            }, {} as Record<Currency, number>)
+            const dayCurrencies = (Object.keys(dayByCurrency) as Currency[]).filter((c) => dayByCurrency[c] > 0)
+            return (
             <div key={key}>
-              <div className="day">
+              <div className="day" style={{ alignItems: 'flex-start' }}>
                 <span className="d">{dayLabel(key)}</span>
-                <span className="t m">{ss.reduce((s, o) => s + o.total, 0).toFixed(2)}</span>
+                <span style={{ textAlign: 'right' }}>
+                  {dayCurrencies.length === 0 && <span className="t m">{money(0, 'USD')}</span>}
+                  {dayCurrencies.map((c, i) => (
+                    <span key={c} className="t m" style={{ display: 'block' }}>
+                      {i > 0 ? '+ ' : ''}{money(dayByCurrency[c], c)}
+                    </span>
+                  ))}
+                  {dayCurrencies.length === 1 && (
+                    <span className="m" style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--cl-ink-3)' }}>
+                      {money(secondaryAmountOf(dayByCurrency[dayCurrencies[0]], dayCurrencies[0], undefined, rate), otherCurrency(dayCurrencies[0]))}
+                    </span>
+                  )}
+                </span>
               </div>
               {ss.map((order) => {
                 const label = customerLabelOf(order)
                 const anyPendingPickup = order.lines.some((l) => l.tbs && !l.pickedUp)
                 const anyPickedUp = order.lines.some((l) => l.tbs && l.pickedUp)
+                const secondary = secondaryAmountOf(order.total, order.currency, order.rateAtSale, rate)
                 return (
-                  <div key={order.orderNumber} className="entry">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-                      <span className="m" style={{ fontSize: 16, fontWeight: 700 }}>{order.total.toFixed(2)}</span>
+                  <div
+                    key={order.orderNumber}
+                    className="entry"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setInvoiceOrderNumber(order.orderNumber)}
+                  >
+                    {/* Items first and prominent -- what's in the sale matters
+                        more when scanning the ledger than any other line. */}
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--cl-ink)', lineHeight: 1.4 }}>
+                      {order.lines.map((l, i) => (
+                        <span key={l.id}>
+                          {i > 0 && ' · '}{l.qty} {l.unitType ? `${l.unitType} ` : ''}{l.itemName}
+                          {l.tbs && !l.pickedUp && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); markSalePickedUp(l) }}
+                              style={{ marginLeft: 5, border: 0, background: 'var(--cl-amber)', borderRadius: 6, padding: '1px 6px', font: '700 9px Archivo', cursor: 'pointer', color: 'var(--cl-ink)' }}
+                            >
+                              GIVE
+                            </button>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginTop: 5 }}>
                       <span style={{ display: 'flex', gap: 5 }}>
                         {anyPendingPickup && <span className="pill amber">tbs</span>}
                         {anyPickedUp && !anyPendingPickup && <span className="pill grey">picked up</span>}
                       </span>
+                      <span style={{ textAlign: 'right' }}>
+                        <span className="m" style={{ display: 'block', fontSize: 16, fontWeight: 700, color: 'var(--cl-usd)' }}>
+                          {money(order.total, order.currency)}
+                        </span>
+                        <span className="m" style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--cl-ink-3)' }}>
+                          {money(secondary, otherCurrency(order.currency))}
+                        </span>
+                      </span>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4, fontSize: 12, fontWeight: 700 }}>
-                      <span>#{order.orderNumber}</span>
+                    <div
+                      style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 5, fontSize: 12, color: 'var(--cl-ink-2)' }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       {editingOrderNumber === order.orderNumber ? (
                         <input
                           autoFocus
@@ -192,47 +262,48 @@ export default function Book() {
                         />
                       ) : (
                         <>
-                          <span>· {label}</span>
+                          <span>{label}</span>
                           <button onClick={() => startEdit(order)} aria-label="Rename customer" style={{ color: 'var(--cl-ink-3)' }}>
                             <EditIcon className="h-3 w-3" />
                           </button>
                         </>
                       )}
-                      <span style={{ marginLeft: 'auto', fontWeight: 500, color: 'var(--cl-ink-3)' }}>{formatTimeMonrovia(order.timestamp)}</span>
                     </div>
 
-                    <div style={{ fontSize: 12, color: 'var(--cl-ink-2)', lineHeight: 1.5, marginTop: 4 }}>
-                      {order.lines.map((l, i) => (
-                        <span key={l.id}>
-                          {i > 0 && ' · '}{l.qty} {l.itemName}
-                          {l.tbs && !l.pickedUp && (
+                    <div className="m" style={{ fontSize: 11, marginTop: 5, color: 'var(--cl-ink-3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                      <span>#{order.orderNumber} · {formatTimeMonrovia(order.timestamp)}</span>
+                      <span style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => setCardMenuFor(cardMenuFor === order.orderNumber ? null : order.orderNumber)}
+                          aria-label="More options"
+                          style={{ border: 0, background: 'none', color: 'var(--cl-ink-3)', cursor: 'pointer', padding: 2 }}
+                        >
+                          <MoreVerticalIcon className="h-3.5 w-3.5" />
+                        </button>
+                        {cardMenuFor === order.orderNumber && (
+                          <div
+                            style={{
+                              position: 'absolute', right: 0, bottom: '100%', marginBottom: 4, zIndex: 20,
+                              background: 'var(--cl-card)', border: '1px solid var(--cl-line)', borderRadius: 8,
+                              boxShadow: '0 2px 10px rgba(0,0,0,.1)', whiteSpace: 'nowrap',
+                            }}
+                          >
                             <button
-                              onClick={() => markSalePickedUp(l)}
-                              style={{ marginLeft: 5, border: 0, background: 'var(--cl-amber)', borderRadius: 6, padding: '1px 6px', font: '700 9px Archivo', cursor: 'pointer', color: 'var(--cl-ink)' }}
+                              onClick={() => { setCardMenuFor(null); order.lines.forEach((l) => deleteSaleLine(l)) }}
+                              style={{ border: 0, background: 'none', color: 'var(--cl-alarm)', font: '700 11px Archivo', cursor: 'pointer', padding: '8px 12px' }}
                             >
-                              GIVE
+                              VOID
                             </button>
-                          )}
-                        </span>
-                      ))}
-                    </div>
-
-                    <div className="m" style={{ fontSize: 11, marginTop: 7, color: 'var(--cl-ink-3)', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                      <button onClick={() => setInvoiceOrderNumber(order.orderNumber)} style={{ color: 'var(--cl-ink-3)', textDecoration: 'underline' }}>
-                        View invoice
-                      </button>
-                      <button
-                        onClick={() => order.lines.forEach((l) => deleteSaleLine(l))}
-                        style={{ border: 0, background: 'none', color: 'var(--cl-ink-3)', font: '700 10px Archivo', cursor: 'pointer' }}
-                      >
-                        VOID
-                      </button>
+                          </div>
+                        )}
+                      </span>
                     </div>
                   </div>
                 )
               })}
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 

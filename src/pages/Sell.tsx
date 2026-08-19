@@ -92,6 +92,8 @@ export default function Sell() {
   const variants = useLiveQuery(() => db.variants.toArray(), []) ?? []
   const salesRaw = useLiveQuery(() => db.sales.toArray(), []) ?? []
   const sales = useMemo(() => withoutVoided(salesRaw), [salesRaw])
+  const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
+  const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
 
   const productById = useMemo(() => new Map(products.map((p) => [p.id!, p])), [products])
   const qtySoldByVariant = useMemo(() => {
@@ -222,6 +224,7 @@ export default function Sell() {
                 currency={c.variant.currency}
                 unit={guessUnit(`${c.product.name} ${c.variant.label}`, c.product.category)}
                 qty={c.variant.stockMyShop + c.variant.stockVishalShop}
+                rate={rate}
                 onClick={() => add(c)}
               />
             ))}
@@ -322,8 +325,18 @@ function SettleSheet({
   const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
   const currency: Currency = cart[0]?.currency ?? 'USD'
 
-  const items = cart.reduce((s, l) => s + l.qty * l.price, 0)
-  const cogs = cart.reduce((s, l) => s + l.qty * l.cost, 0)
+  // Effective price for a line: the in-progress typed draft while its
+  // price button is armed (it may never receive a real blur event on a
+  // touch keypad, so waiting for commitLinePrice to fire before the total
+  // updates left the agreed price visibly stuck on stale numbers), else
+  // the last committed price.
+  const effPrice = (l: CartLine) => (l.priceDraft !== undefined ? Number(l.priceDraft) || 0 : l.price)
+  const items = cart.reduce((s, l) => s + l.qty * effPrice(l), 0)
+  // Line costs are always USD (see CatalogEntryCard) -- convert to the
+  // sale's own currency before comparing against/displaying alongside the
+  // agreed price, which is in that currency.
+  const cogsUsd = cart.reduce((s, l) => s + l.qty * l.cost, 0)
+  const cogs = currency === 'USD' ? cogsUsd : cogsUsd * rate
   const agreed = deal === '' ? items : Number(deal) || 0
   const paid = (Number(payU) || 0) + (Number(payL) || 0) / rate
   const bal = agreed - paid
@@ -377,6 +390,7 @@ function SettleSheet({
             soldFor: lineAgreed,
             costAtSale: l.cost * l.qty,
             currency,
+            rateAtSale: rate,
             timestamp,
             customerNumber,
             customerName: who.trim() || undefined,
@@ -423,7 +437,7 @@ function SettleSheet({
                   <small>
                     {l.qty}{' '}
                     <button onClick={() => setUnitPickerFor(l.key)} style={{ textDecoration: 'underline', color: 'inherit', font: 'inherit' }}>{l.unitType}</button>
-                    {' · cost '}{money(l.cost, l.currency)}{l.tbs ? ' · collect later' : ''}
+                    {' · cost '}{money(l.cost, 'USD')}{l.tbs ? ' · collect later' : ''}
                   </small>
                 </span>
                 <span className="stp">

@@ -15,18 +15,27 @@ export function CatalogEntryCard({
   currency,
   unit,
   qty,
+  rate,
   onClick,
 }: {
   title: string
+  // Always USD -- cost is entered and stored in USD regardless of what
+  // currency the item sells in (there's no cost-currency picker anywhere
+  // in the app), so it's rendered as USD here rather than tagged with the
+  // sell-side `currency`.
   cost: number
   sell: number
   currency: Currency
   unit: string
   qty: number
+  // LRD-per-USD, needed to convert the USD cost into the sell currency so
+  // the markup delta below is an apples-to-apples subtraction.
+  rate: number
   onClick?: () => void
 }) {
   const Comp = onClick ? 'button' : 'div'
-  const markup = sell - cost
+  const costInSellCurrency = currency === 'USD' ? cost : cost * rate
+  const markup = sell - costInSellCurrency
   return (
     <Comp
       type={onClick ? 'button' : undefined}
@@ -42,7 +51,7 @@ export function CatalogEntryCard({
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 5, gap: 8 }}>
         <span className="m" style={{ fontSize: 11, color: 'var(--cl-ink-3)' }}>
-          cost {money(cost, currency)}
+          cost {money(cost, 'USD')}
           {markup > 0 && <> → +{money(markup, currency)}</>} per {unit}
         </span>
         <span className="m" style={{ flexShrink: 0, fontSize: 11, color: 'var(--cl-ink-3)' }}>

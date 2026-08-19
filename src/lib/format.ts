@@ -3,8 +3,12 @@ import type { Currency } from '../db'
 
 const SYMBOLS: Record<Currency, string> = { USD: '$', LRD: 'L$' }
 
+// Liberian dollar amounts are always whole numbers in real use here -- no
+// coins, no decimals stored or spoken -- so LRD renders rounded with no
+// decimal places while USD keeps its standard 2.
 export function money(amount: number, currency: Currency): string {
   const symbol = SYMBOLS[currency]
+  if (currency === 'LRD') return `${symbol}${Math.round(amount).toLocaleString()}`
   return `${symbol}${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
