@@ -21,16 +21,42 @@ export interface Product {
   updatedAt: number
 }
 
+// An extra way to sell the same underlying stock -- e.g. Zinc 14G's stock
+// is counted in sheets, but it can also go out by the bundle: { unit:
+// "Bundle", factor: 20, price: 55, currency: "USD" } means 1 bundle = 20
+// sheets, sold for $55. `factor` is always in the variant's own base unit
+// (whatever stockMyShop/stockVishalShop count in). The variant's own
+// costPrice/sellPrice/currency remain the implicit first sell-unit
+// (factor 1, at the base unit) -- these are strictly additional options
+// layered on top, never a replacement for them.
+export interface SellUnit {
+  unit: string
+  factor: number
+  price: number
+  currency: Currency
+  // true = this unit's price was deliberately set by hand and should never
+  // be overwritten by the rolling average of what's actually being
+  // charged; false/absent = the average keeps this price current.
+  manual?: boolean
+}
+
 export interface Variant {
   id?: number
   productId: number
   label: string // e.g. "Double, Foam, Grade A", "Blue Gallon", or "Standard"
   optionValues: string[] // parallel to Product.options — the combination this variant represents; empty for freeform variants
   sku?: string
-  costPrice: number
+  costPrice: number // always per the variant's base unit, always USD
   costUnknown: boolean // true when cost hasn't been entered yet (quick sale of a walk-in item)
-  sellPrice: number
+  sellPrice: number // per the variant's base unit, in `currency`
   currency: Currency
+  // true = sellPrice was deliberately set by hand and should never be
+  // overwritten by the rolling average of what's actually being charged
+  // for the base unit; false/absent = the average keeps it current. A
+  // fresh variant with no sales yet just keeps whatever price it was
+  // given until the first real sale starts the average.
+  sellPriceManual?: boolean
+  sellUnits?: SellUnit[] // additional ways to sell this same stock -- see SellUnit
   stockMyShop: number
   stockVishalShop: number
   lowStockThreshold: number

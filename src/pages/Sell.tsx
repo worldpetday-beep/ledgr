@@ -18,12 +18,19 @@ import { CatalogEntryCard } from '../components/CatalogEntryCard'
 import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
 import { itemSearchMatches } from '../lib/itemMatch'
-import { guessUnit } from '../lib/unitGuess'
+import { sellUnitsOf, convertAmount } from '../lib/sellUnits'
+import { priceStatsFor } from '../lib/priceStats'
+import type { SellUnit } from '../db'
 
+// One row per sell-unit, not per variant -- Zinc 14G's stock is sold both
+// "by the sheet" (LRD) and "by the bundle" (USD), and each needs its own
+// tappable row with its own price/currency so tapping one is enough to
+// pick both the unit and the currency at once.
 interface Candidate {
   key: string
   product: Product
   variant: Variant
+  unit: SellUnit
   label: string
 }
 
@@ -34,6 +41,9 @@ interface CartLine {
   label: string
   qty: number
   unitType: string
+  // How many of the variant's base stock unit one `unitType` equals --
+  // stock is always decremented by qty * factor, never just qty.
+  factor: number
   price: number
   currency: Currency
   cost: number
@@ -128,14 +138,16 @@ export default function Sell() {
   }, [sales])
 
   const allCandidates = useMemo<Candidate[]>(() => {
-    return variants
-      .filter((v) => !productById.get(v.productId)?.archived)
-      .map((v) => {
-        const product = productById.get(v.productId)
-        if (!product) return null
-        return { key: `${product.id}-${v.id}`, product, variant: v, label: sellLabel(product.name, v.label) }
+    const out: Candidate[] = []
+    for (const v of variants) {
+      const product = productById.get(v.productId)
+      if (!product || product.archived) continue
+      const label = sellLabel(product.name, v.label)
+      sellUnitsOf(v, product.name, product.category).forEach((unit, i) => {
+        out.push({ key: `${product.id}-${v.id}-${i}`, product, variant: v, unit, label })
       })
-      .filter((c): c is Candidate => c != null)
+    }
+    return out
   }, [variants, productById])
 
   // Leading number = quantity, e.g. "3 zi" -> qty 3, search term "zi".
@@ -153,12 +165,22 @@ export default function Sell() {
 
   function add(c: Candidate, n = qty) {
     setCart((prev) => {
-      const i = prev.findIndex((l) => l.variantId === c.variant.id)
+      // Two rows for the same variant (e.g. "per sheet" and "per bundle")
+      // are different sell-units, not the same line -- only merge when
+      // both the variant AND the tapped unit match.
+      const i = prev.findIndex((l) => l.variantId === c.variant.id && l.unitType === c.unit.unit)
       if (i >= 0) {
         const next = [...prev]
         next[i] = { ...next[i], qty: next[i].qty + n }
         return next
       }
+      // A sale has one running currency, set by whichever unit is tapped
+      // first -- a later tap on a unit priced in the other currency still
+      // gets added, just converted into the cart's currency so the total/
+      // balance math downstream stays a single number instead of having
+      // to track two running totals at once.
+      const cartCurrency = prev[0]?.currency ?? c.unit.currency
+      const price = convertAmount(c.unit.price, c.unit.currency, cartCurrency, rate)
       return [
         ...prev,
         {
@@ -167,10 +189,11 @@ export default function Sell() {
           variantId: c.variant.id!,
           label: c.label,
           qty: n,
-          unitType: guessUnit(`${c.product.name} ${c.variant.label}`, c.product.category),
-          price: c.variant.sellPrice,
-          currency: c.variant.currency,
-          cost: c.variant.costPrice,
+          unitType: c.unit.unit,
+          factor: c.unit.factor,
+          price,
+          currency: cartCurrency,
+          cost: c.variant.costPrice * c.unit.factor,
           tbs: false,
           stock: c.variant.stockMyShop + c.variant.stockVishalShop,
         },
@@ -189,7 +212,8 @@ export default function Sell() {
     const created = await db.variants.where('productId').equals(productId).last()
     const product = await db.products.get(productId)
     if (!created || !product) return
-    add({ key: `${productId}-${created.id}`, product, variant: created, label: sellLabel(product.name, created.label) }, qty)
+    const [unit] = sellUnitsOf(created, product.name, product.category)
+    add({ key: `${productId}-${created.id}-0`, product, variant: created, unit, label: sellLabel(product.name, created.label) }, qty)
   }
 
   const items = cart.reduce((s, l) => s + l.qty * l.price, 0)
@@ -243,12 +267,12 @@ export default function Sell() {
               {results.map((c) => (
                 <CatalogEntryCard
                   key={c.key}
-                  title={c.label}
-                  cost={c.variant.costPrice}
-                  sell={c.variant.sellPrice}
-                  currency={c.variant.currency}
-                  unit={guessUnit(`${c.product.name} ${c.variant.label}`, c.product.category)}
-                  qty={c.variant.stockMyShop + c.variant.stockVishalShop}
+                  title={c.unit.factor === 1 ? c.label : `${c.label} — per ${c.unit.unit}`}
+                  cost={c.variant.costPrice * c.unit.factor}
+                  sell={c.unit.price}
+                  currency={c.unit.currency}
+                  unit={c.unit.unit}
+                  qty={Math.floor((c.variant.stockMyShop + c.variant.stockVishalShop) / c.unit.factor)}
                   rate={rate}
                   onClick={() => add(c)}
                 />
@@ -279,10 +303,10 @@ export default function Sell() {
                     {c.label}
                   </span>
                   <span className="m" style={{ fontSize: 12, fontWeight: 700, color: 'var(--cl-ink)' }}>
-                    {money(c.variant.sellPrice, c.variant.currency)}
+                    {money(c.unit.price, c.unit.currency)}
                   </span>
                   <span className="m" style={{ fontSize: 10, color: 'var(--cl-ink-3)' }}>
-                    per {guessUnit(`${c.product.name} ${c.variant.label}`, c.product.category)}
+                    per {c.unit.unit}
                   </span>
                 </button>
               ))}
@@ -526,14 +550,39 @@ function SettleSheet({
             pickedUp: !l.tbs,
           })
 
-          if (!l.tbs) {
-            const fresh = await db.variants.get(l.variantId)
-            if (fresh) {
+          const fresh = await db.variants.get(l.variantId)
+          if (fresh) {
+            if (!l.tbs) {
+              // Stock is always counted in the variant's base unit -- one
+              // "bundle" of factor 20 deducts 20 base units, not 1.
+              const baseQty = l.qty * l.factor
               const updated =
                 location === 'vishalShop'
-                  ? { stockVishalShop: Math.max(0, fresh.stockVishalShop - l.qty) }
-                  : { stockMyShop: Math.max(0, fresh.stockMyShop - l.qty) }
+                  ? { stockVishalShop: Math.max(0, fresh.stockVishalShop - baseQty) }
+                  : { stockMyShop: Math.max(0, fresh.stockMyShop - baseQty) }
               await db.variants.update(l.variantId, { ...updated, updatedAt: Date.now() })
+            }
+
+            // Reference price: a rolling average of what this unit has
+            // actually sold for, unless the shop owner pinned it by hand in
+            // the product editor. Runs for every line regardless of TBS --
+            // a to-be-picked-up sale still charged a real price.
+            // The just-added row above is already visible to this read --
+            // same Dexie transaction -- so it's included without having to
+            // splice it in separately.
+            const allForVariant = await db.sales.where('variantId').equals(l.variantId).toArray()
+            const stats = priceStatsFor(allForVariant.filter((s) => !s.voidedAt), l.variantId, l.unitType, currency)
+            const isBaseUnit = fresh.sellUnits == null || fresh.sellUnits.every((u) => u.unit !== l.unitType)
+            if (isBaseUnit) {
+              if (!fresh.sellPriceManual && stats.count > 0) {
+                await db.variants.update(l.variantId, { sellPrice: roundAmt(stats.avg), updatedAt: Date.now() })
+              }
+            } else {
+              const idx = (fresh.sellUnits ?? []).findIndex((u) => u.unit === l.unitType)
+              if (idx >= 0 && !fresh.sellUnits![idx].manual && stats.count > 0) {
+                const nextUnits = fresh.sellUnits!.map((u, i) => (i === idx ? { ...u, price: roundAmt(stats.avg) } : u))
+                await db.variants.update(l.variantId, { sellUnits: nextUnits, updatedAt: Date.now() })
+              }
             }
           }
         }
