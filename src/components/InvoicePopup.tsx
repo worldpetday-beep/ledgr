@@ -246,8 +246,12 @@ export function InvoicePopup({ order, dailyIndex, onClose }: { order: InvoiceOrd
     return <BottomSheet open={false} onClose={onClose}>{null}</BottomSheet>
   }
 
-  const soldUsd = order.lines.filter((l) => l.currency === 'USD').reduce((s, l) => s + l.soldFor, 0)
-  const soldLrd = order.lines.filter((l) => l.currency === 'LRD').reduce((s, l) => s + l.soldFor, 0)
+  // usdAmountOf/lrdAmountOf already pull the right amount out of a line
+  // whichever side (primary or split-paid secondary) it's actually in --
+  // summing sale.soldFor directly here would silently drop a line's LRD
+  // portion whenever USD was its primary currency (or the reverse).
+  const soldUsd = order.lines.reduce((s, l) => s + usdAmountOf(l), 0)
+  const soldLrd = order.lines.reduce((s, l) => s + lrdAmountOf(l), 0)
   const costUsd = order.lines.filter((l) => l.currency === 'USD').reduce((s, l) => s + l.costAtSale, 0)
   const costLrd = order.lines.filter((l) => l.currency === 'LRD').reduce((s, l) => s + l.costAtSale, 0)
   const profitUsd = order.lines.filter((l) => l.currency === 'USD').reduce((s, l) => s + profitOf(l), 0)

@@ -7,7 +7,8 @@ import { LedgerScanView } from '../components/LedgerScan'
 import { WarehouseLedgerView } from '../components/WarehouseLedger'
 import { InvoicePopup } from '../components/InvoicePopup'
 import { dateKeyMonrovia, formatShortDateMonrovia, formatTimeMonrovia, money } from '../lib/format'
-import { collectPayment, customerLabelOf, deleteSaleLine, markSalePickedUp, owingOf, withoutVoided } from '../lib/salesLedger'
+import { collectPayment, customerLabelOf, deleteSaleLine, lrdAmountOf, markSalePickedUp, owingOf, usdAmountOf, withoutVoided } from '../lib/salesLedger'
+import { convertAmount } from '../lib/sellUnits'
 
 // Converts an amount to the other currency using the rate that was in
 // effect when it was actually recorded (falls back to today's rate for
@@ -82,14 +83,26 @@ export default function Book() {
       customerName: lines.find((l) => l.customerName)?.customerName,
       lines,
       anyTbs: lines.some((l) => l.tbs),
-      total: lines.reduce((s, l) => s + l.soldFor + (l.secondaryAmount ?? 0), 0),
+      // A line can be split-paid across both currencies (usdAmountOf/
+      // lrdAmountOf pull out each side correctly regardless of which one
+      // was primary) -- naively adding soldFor + secondaryAmount together
+      // used to blend two different currencies into one raw number
+      // (e.g. "$50 + L$1000" read as "$1050"). Convert each side into the
+      // order's own currency, at the rate that was actually in effect for
+      // that line, before summing.
+      total: lines.reduce((s, l) => {
+        const lineRate = l.rateAtSale ?? rate
+        const usdPart = usdAmountOf(l)
+        const lrdPart = lrdAmountOf(l)
+        return s + convertAmount(usdPart, 'USD', lines[0].currency, lineRate) + convertAmount(lrdPart, 'LRD', lines[0].currency, lineRate)
+      }, 0),
       owing: lines.reduce((s, l) => s + owingOf(l), 0),
       currency: lines[0].currency,
       rateAtSale: lines[0].rateAtSale,
     }))
     groups.sort((a, b) => b.timestamp - a.timestamp)
     return groups
-  }, [allSales])
+  }, [allSales, rate])
 
   const owingOrders = useMemo(() => orders.filter((o) => o.owing > 0.005), [orders])
   const owingByCurrency = useMemo(() => {
