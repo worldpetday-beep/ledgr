@@ -51,7 +51,9 @@ const DAY_MS = 86400000
 // list like Sell's search results has no other context on the row, so
 // "14G" alone is meaningless without "Zinc — " in front of it.
 function sellLabel(productName: string, variantLabel: string): string {
-  return variantLabel === 'Standard' ? productName : `${productName} — ${variantLabel}`
+  if (variantLabel === 'Standard') return productName
+  if (variantLabel.toLowerCase().includes(productName.toLowerCase())) return variantLabel
+  return `${productName} — ${variantLabel}`
 }
 
 // The one screen that has to be fast: search is pinned under the header and
@@ -327,7 +329,6 @@ function SettleSheet({
   const bal = agreed - paid
   const owing = bal > 0.005
   const tbsN = cart.filter((l) => l.tbs).length
-  const needName = (owing || tbsN > 0) && !who.trim()
 
   function press(k: string) {
     const nx = (v: string) => (k === 'del' ? v.slice(0, -1) : k === '.' ? (v.includes('.') ? v : v === '' ? '0.' : v + '.') : v + k)
@@ -352,7 +353,7 @@ function SettleSheet({
   }
 
   async function commit() {
-    if (needName || agreed <= 0 || saving) return
+    if (agreed <= 0 || saving) return
     setSaving(true)
     const timestamp = past ? new Date(`${date}T12:00:00`).getTime() : Date.now()
     const totalQty = cart.reduce((s, l) => s + l.qty, 0) || cart.length
@@ -464,7 +465,7 @@ function SettleSheet({
 
           {(owing || tbsN > 0) && (
             <div className="fld" style={{ marginTop: 10, marginBottom: 0 }}>
-              <input className="in" value={who} onChange={(e) => setWho(e.target.value)} placeholder={owing ? 'Customer name — needed for the balance' : 'Customer name — for the TBS item'} />
+              <input className="in" value={who} onChange={(e) => setWho(e.target.value)} placeholder={owing ? 'Customer name (optional) — for the balance' : 'Customer name (optional) — for the TBS item'} />
             </div>
           )}
 
@@ -499,8 +500,8 @@ function SettleSheet({
               <button key={k} onClick={() => press(k)}>{k === 'del' ? '⌫' : k}</button>
             ))}
           </div>
-          <button className={`go2${owing ? ' credit' : ''}`} disabled={needName || agreed <= 0 || saving} onClick={commit}>
-            {saving ? 'Recording…' : needName ? 'Add the customer name' : owing ? `Record · ${money(bal, 'USD')} owing` : past ? 'Record for this day' : 'Record sale'}
+          <button className={`go2${owing ? ' credit' : ''}`} disabled={agreed <= 0 || saving} onClick={commit}>
+            {saving ? 'Recording…' : owing ? `Record · ${money(bal, 'USD')} owing` : past ? 'Record for this day' : 'Record sale'}
           </button>
         </div>
       </div>
