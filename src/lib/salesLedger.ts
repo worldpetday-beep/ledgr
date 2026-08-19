@@ -42,6 +42,32 @@ export function owingOf(sale: Sale): number {
   return Math.max(0, sale.soldFor - paid)
 }
 
+export function owingUsd(sale: Sale, currentRate: number): number {
+  const rate = sale.rateAtSale ?? currentRate
+  const owed = owingOf(sale)
+  return sale.currency === 'USD' ? owed : owed / rate
+}
+
+// How much of this line's *own* currency was actually collected (not just
+// agreed) -- a split-currency line's secondary half is treated as always
+// collected (both halves get handed over at the register in the same
+// motion), only the primary side can be partially paid via paidAmount.
+// Used for a cash drawer's "money that actually came in" figure, which is
+// a different question from "value of goods sold" (usdAmountOf/
+// lrdAmountOf) whenever a sale was left with a balance owing.
+export function paidUsdAmountOf(sale: Sale): number {
+  const paidPrimary = sale.paidAmount ?? sale.soldFor
+  if (sale.currency === 'USD') return paidPrimary
+  if (sale.secondaryCurrency === 'USD') return sale.secondaryAmount ?? 0
+  return 0
+}
+export function paidLrdAmountOf(sale: Sale): number {
+  const paidPrimary = sale.paidAmount ?? sale.soldFor
+  if (sale.currency === 'LRD') return paidPrimary
+  if (sale.secondaryCurrency === 'LRD') return sale.secondaryAmount ?? 0
+  return 0
+}
+
 // Applies a payment (in the order's currency) against an order's still-open
 // balance, oldest line first, capping each line's paidAmount at its own
 // soldFor -- soldFor itself is never touched, so this never re-totals a

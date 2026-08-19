@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, DRAWER_OUT_KINDS, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type DrawerOut, type Currency } from '../db'
 import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
-import { lrdAmountOf, usdAmountOf, withoutVoided } from '../lib/salesLedger'
+import { owingUsd, paidLrdAmountOf, paidUsdAmountOf, saleValueUsd, withoutVoided } from '../lib/salesLedger'
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
@@ -56,10 +56,21 @@ export default function Drawer() {
   const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
   const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
 
-  const sold = daySales.reduce((s, l) => s + l.soldFor + (l.secondaryAmount ?? 0), 0)
-  const inU = daySales.reduce((s, l) => s + usdAmountOf(l), 0)
-  const inL = daySales.reduce((s, l) => s + lrdAmountOf(l), 0)
-  const soldButNotCash = sold - (inU + inL / rate)
+  // Blended into USD per-line (saleValueUsd converts the LRD portion at
+  // the rate that was actually in effect) -- this used to be a raw
+  // soldFor + secondaryAmount sum tagged 'USD' regardless of what
+  // currency the sale was actually in, so a handful of LRD sales could
+  // read as thousands of "dollars" that were never really there.
+  const sold = daySales.reduce((s, l) => s + saleValueUsd(l, rate), 0)
+  // "Cash came in" is what actually landed in the drawer, not what was
+  // agreed -- a sale left with a balance owing shouldn't inflate this
+  // figure just because the goods went out. paidUsdAmountOf/
+  // paidLrdAmountOf read paidAmount (falling back to the old "no tracking
+  // yet = fully paid" assumption for sales from before that field
+  // existed), not soldFor.
+  const inU = daySales.reduce((s, l) => s + paidUsdAmountOf(l), 0)
+  const inL = daySales.reduce((s, l) => s + paidLrdAmountOf(l), 0)
+  const soldButNotCash = daySales.reduce((s, l) => s + owingUsd(l, rate), 0)
 
   const outs = rec?.outs ?? []
   const outU = outs.filter((o) => o.cur === 'USD').reduce((s, o) => s + o.amt, 0)
@@ -113,12 +124,12 @@ export default function Drawer() {
             <div className="kpi">
               <span className="k">Sold today</span>
               <span className="v m">{money(sold, 'USD')}</span>
-              <span className="s">{daySales.length} sale{daySales.length === 1 ? '' : 's'}</span>
+              <span className="s">{daySales.length} sale{daySales.length === 1 ? '' : 's'} — value of goods sold, even if not yet paid</span>
             </div>
             <div className="kpi a">
               <span className="k">Cash came in</span>
               <span className="v m">{money(inU + inL / rate, 'USD')}</span>
-              <span className="s m">{money(inU, 'USD')} + {money(inL, 'LRD')}</span>
+              <span className="s m">{money(inU, 'USD')} + {money(inL, 'LRD')} — actually collected today</span>
             </div>
           </div>
 
