@@ -16,6 +16,32 @@ export function usdAmountOf(sale: Sale): number {
   return 0
 }
 
+// Missing paidAmount (every sale recorded before this field existed) reads
+// as "fully paid" -- that was the implicit assumption the whole app made
+// before balances were tracked at all, so it stays true for old records.
+export function owingOf(sale: Sale): number {
+  const paid = sale.paidAmount ?? sale.soldFor
+  return Math.max(0, sale.soldFor - paid)
+}
+
+// Applies a payment (in the order's currency) against an order's still-open
+// balance, oldest line first, capping each line's paidAmount at its own
+// soldFor -- soldFor itself is never touched, so this never re-totals a
+// sale, it only records that more of it has now actually been collected.
+export async function collectPayment(lines: Sale[], amount: number): Promise<void> {
+  let remaining = amount
+  await db.transaction('rw', db.sales, async () => {
+    for (const l of lines) {
+      if (remaining <= 0) break
+      const owed = owingOf(l)
+      if (owed <= 0) continue
+      const applied = Math.min(owed, remaining)
+      remaining -= applied
+      await db.sales.update(l.id!, { paidAmount: (l.paidAmount ?? l.soldFor) + applied })
+    }
+  })
+}
+
 export function customerLabelOf(sale: Pick<Sale, 'customerNumber' | 'customerName'>): string {
   return sale.customerName || `Customer ${String(sale.customerNumber).padStart(3, '0')}`
 }

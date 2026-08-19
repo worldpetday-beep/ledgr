@@ -7,7 +7,7 @@ import { LedgerScanView } from '../components/LedgerScan'
 import { WarehouseLedgerView } from '../components/WarehouseLedger'
 import { InvoicePopup } from '../components/InvoicePopup'
 import { dateKeyMonrovia, formatShortDateMonrovia, formatTimeMonrovia, money } from '../lib/format'
-import { customerLabelOf, deleteSaleLine, markSalePickedUp, withoutVoided } from '../lib/salesLedger'
+import { collectPayment, customerLabelOf, deleteSaleLine, markSalePickedUp, owingOf, withoutVoided } from '../lib/salesLedger'
 
 // Converts an amount to the other currency using the rate that was in
 // effect when it was actually recorded (falls back to today's rate for
@@ -21,7 +21,7 @@ function otherCurrency(c: Currency): Currency {
   return c === 'USD' ? 'LRD' : 'USD'
 }
 
-type FilterTab = 'all' | 'tbs'
+type FilterTab = 'all' | 'tbs' | 'owing'
 const DAY_MS = 24 * 60 * 60 * 1000
 
 function dayLabel(key: string): string {
@@ -39,6 +39,7 @@ interface OrderGroup {
   lines: Sale[]
   anyTbs: boolean
   total: number
+  owing: number
   currency: Currency
   rateAtSale?: number
 }
@@ -82,6 +83,7 @@ export default function Book() {
       lines,
       anyTbs: lines.some((l) => l.tbs),
       total: lines.reduce((s, l) => s + l.soldFor + (l.secondaryAmount ?? 0), 0),
+      owing: lines.reduce((s, l) => s + owingOf(l), 0),
       currency: lines[0].currency,
       rateAtSale: lines[0].rateAtSale,
     }))
@@ -89,9 +91,17 @@ export default function Book() {
     return groups
   }, [allSales])
 
+  const owingOrders = useMemo(() => orders.filter((o) => o.owing > 0.005), [orders])
+  const owingByCurrency = useMemo(() => {
+    const m = {} as Record<Currency, number>
+    for (const o of owingOrders) m[o.currency] = (m[o.currency] ?? 0) + o.owing
+    return m
+  }, [owingOrders])
+
   const filtered = useMemo(() => {
     let list = orders
     if (filterTab === 'tbs') list = list.filter((o) => o.anyTbs)
+    if (filterTab === 'owing') list = list.filter((o) => o.owing > 0.005)
     if (q.trim()) {
       const t = q.toLowerCase()
       list = list.filter((o) => {
@@ -138,6 +148,22 @@ export default function Book() {
     setEditingOrderNumber(null)
   }
 
+  const [collectingOrderNumber, setCollectingOrderNumber] = useState<number | null>(null)
+  const [collectAmount, setCollectAmount] = useState('')
+  const collectingOrder = collectingOrderNumber != null ? orders.find((o) => o.orderNumber === collectingOrderNumber) ?? null : null
+
+  function openCollect(order: OrderGroup) {
+    setCollectingOrderNumber(order.orderNumber)
+    setCollectAmount(order.currency === 'LRD' ? String(Math.round(order.owing)) : order.owing.toFixed(2))
+  }
+  async function submitCollect() {
+    if (!collectingOrder) return
+    const amt = Number(collectAmount) || 0
+    if (amt > 0) await collectPayment(collectingOrder.lines, Math.min(amt, collectingOrder.owing))
+    setCollectingOrderNumber(null)
+    setCollectAmount('')
+  }
+
   return (
     <div className="cl flex min-h-[calc(100dvh-6rem)] flex-col md:min-h-[calc(100dvh-2rem)]">
       <div className="hd">
@@ -167,6 +193,9 @@ export default function Book() {
           <div className="chips" style={{ paddingTop: 4 }}>
             <button className={filterTab === 'all' ? 'on' : ''} onClick={() => setFilterTab('all')}>Everything</button>
             <button className={filterTab === 'tbs' ? 'on' : ''} onClick={() => setFilterTab('tbs')}>To be supplied</button>
+            <button className={filterTab === 'owing' ? 'on' : ''} onClick={() => setFilterTab('owing')}>
+              Owing{owingOrders.length > 0 ? ` · ${(Object.keys(owingByCurrency) as Currency[]).map((c) => money(owingByCurrency[c], c)).join(' + ')}` : ''}
+            </button>
           </div>
 
           {!days.length && (
@@ -231,9 +260,18 @@ export default function Book() {
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginTop: 5 }}>
-                      <span style={{ display: 'flex', gap: 5 }}>
+                      <span style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
                         {anyPendingPickup && <span className="pill amber">tbs</span>}
                         {anyPickedUp && !anyPendingPickup && <span className="pill grey">picked up</span>}
+                        {order.owing > 0.005 && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openCollect(order) }}
+                            className="pill red"
+                            style={{ border: 0, cursor: 'pointer' }}
+                          >
+                            owing {money(order.owing, order.currency)} · collect
+                          </button>
+                        )}
                       </span>
                       <span style={{ textAlign: 'right' }}>
                         <span className="m" style={{ display: 'block', fontSize: 16, fontWeight: 700, color: 'var(--cl-usd)' }}>
@@ -306,6 +344,38 @@ export default function Book() {
           })}
         </div>
       </div>
+
+      {collectingOrder && (
+        <div className="sheet" onClick={() => setCollectingOrderNumber(null)}>
+          <div className="sbox" onClick={(e) => e.stopPropagation()}>
+            <div className="grab" />
+            <div className="scroll" style={{ paddingBottom: 16 }}>
+              <p className="eb">
+                Collect payment · #{collectingOrder.orderNumber}
+                <span className="n"> · owes {money(collectingOrder.owing, collectingOrder.currency)}</span>
+              </p>
+              <div className="fld">
+                <input
+                  autoFocus
+                  className="in tabular"
+                  inputMode="decimal"
+                  value={collectAmount}
+                  onChange={(e) => setCollectAmount(e.target.value)}
+                  placeholder={`Amount collected (${collectingOrder.currency})`}
+                />
+              </div>
+              <button
+                className="btn amber"
+                style={{ width: '100%', marginTop: 10 }}
+                disabled={(Number(collectAmount) || 0) <= 0}
+                onClick={submitCollect}
+              >
+                Record payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {picker && (
         <div className="sheet" onClick={() => setPicker(false)}>

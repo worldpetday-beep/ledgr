@@ -75,7 +75,14 @@ export interface Sale {
   variant?: string // variant/size label at time of sale
   qty: number
   unitType?: string // Carton, Sheet, Bundle, Yard, Gallon, Bucket, Piece, Pack, or a custom unit
-  soldFor: number // total sale price for the qty, in `currency`
+  soldFor: number // total sale price for the qty, in `currency` -- frozen forever, never re-totalled
+  // How much of `soldFor` was actually collected at the register when this
+  // line was recorded, in `currency`. Missing on sales from before this
+  // field existed, or equal to soldFor -- both read as "fully paid" by
+  // owingOf()/collectPayment(). Less than soldFor means the customer still
+  // owes the difference; increased later via collectPayment() as they pay
+  // it down, without ever touching soldFor itself.
+  paidAmount?: number
   costAtSale: number // total cost for the qty
   currency: Currency
   // A single line can be split-paid across both currencies at the register

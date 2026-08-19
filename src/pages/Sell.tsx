@@ -338,12 +338,28 @@ function SettleSheet({
   const cogsUsd = cart.reduce((s, l) => s + l.qty * l.cost, 0)
   const cogs = currency === 'USD' ? cogsUsd : cogsUsd * rate
   const agreed = deal === '' ? items : Number(deal) || 0
-  const paid = (Number(payU) || 0) + (Number(payL) || 0) / rate
+  // What's been typed into the two payment boxes, converted into the
+  // sale's own currency so it's directly comparable to `agreed` -- payU/
+  // payL are two different currencies, not the sale currency itself, so
+  // this can't just be added to `agreed` without converting one side.
+  const paidUsdEquiv = (Number(payU) || 0) + (Number(payL) || 0) / rate
+  const paid = currency === 'USD' ? paidUsdEquiv : paidUsdEquiv * rate
   const bal = agreed - paid
-  const owing = bal > 0.005
+  // LRD has no decimals in real use, so its rounding noise is on the order
+  // of whole units, not cents -- a fixed 0.005 threshold would flag every
+  // LRD sale as "owing" from float drift alone.
+  const balEps = currency === 'USD' ? 0.005 : 0.5
+  const owing = bal > balEps
   const tbsN = cart.filter((l) => l.tbs).length
 
+  // Liberian dollars are always whole numbers here -- the armed field's
+  // currency decides whether the "." key does anything. payL is always
+  // LRD; deal and per-line prices follow the cart's own currency.
+  const armedCurrency: Currency = focus === 'lrd' ? 'LRD' : focus === 'usd' ? 'USD' : currency
+  const armedIsLrd = armedCurrency === 'LRD'
+
   function press(k: string) {
+    if (k === '.' && armedIsLrd) return
     const nx = (v: string) => (k === 'del' ? v.slice(0, -1) : k === '.' ? (v.includes('.') ? v : v === '' ? '0.' : v + '.') : v + k)
     if (focus === 'usd') setPayU(nx(payU))
     else if (focus === 'lrd') setPayL(nx(payL))
@@ -359,10 +375,20 @@ function SettleSheet({
   }
 
   function rest(cur: 'usd' | 'lrd') {
-    const other = cur === 'usd' ? (Number(payL) || 0) / rate : Number(payU) || 0
-    const r = Math.max(0, agreed - other)
-    if (cur === 'usd') { setPayU(r ? r.toFixed(2) : ''); setFocus('usd') }
-    else { setPayL(r ? String(Math.round(r * rate)) : ''); setFocus('lrd') }
+    // Whatever's already sitting in the OTHER box, converted into the
+    // sale's currency so it can be subtracted from `agreed` directly.
+    const otherUsdEquiv = cur === 'usd' ? (Number(payL) || 0) / rate : Number(payU) || 0
+    const otherInSaleCurrency = currency === 'USD' ? otherUsdEquiv : otherUsdEquiv * rate
+    const remainingInSaleCurrency = Math.max(0, agreed - otherInSaleCurrency)
+    if (cur === 'usd') {
+      const usdVal = currency === 'USD' ? remainingInSaleCurrency : remainingInSaleCurrency / rate
+      setPayU(usdVal ? usdVal.toFixed(2) : '')
+      setFocus('usd')
+    } else {
+      const lrdVal = currency === 'LRD' ? remainingInSaleCurrency : remainingInSaleCurrency * rate
+      setPayL(lrdVal ? String(Math.round(lrdVal)) : '')
+      setFocus('lrd')
+    }
   }
 
   async function commit() {
@@ -370,16 +396,30 @@ function SettleSheet({
     setSaving(true)
     const timestamp = past ? new Date(`${date}T12:00:00`).getTime() : Date.now()
     const totalQty = cart.reduce((s, l) => s + l.qty, 0) || cart.length
+    // Round each line's slice of the agreed total (and of what was actually
+    // paid) to whole LRD or 2dp USD, whichever the sale currency is --
+    // matches how the totals themselves are shown, and keeps every line
+    // individually well-formed rather than carrying stray fractional LRD.
+    const roundAmt = (n: number) => (currency === 'LRD' ? Math.round(n) : Math.round(n * 100) / 100)
+    // Never record more paid than was agreed -- anything typed past the
+    // agreed price is change handed back, not money owed against this sale.
+    const totalPaid = Math.min(agreed, Math.max(0, paid))
     try {
       await db.transaction('rw', db.sales, db.variants, db.settings, async () => {
         const customerNumber = await reserveNextCustomerNumber()
         const orderNumber = await reserveNextOrderNumber()
         let remaining = agreed
+        let remainingPaid = totalPaid
         for (let i = 0; i < cart.length; i++) {
           const l = cart[i]
           const isLast = i === cart.length - 1
-          const lineAgreed = isLast ? remaining : Math.round(agreed * (l.qty / totalQty) * 100) / 100
+          const lineAgreed = isLast ? remaining : roundAmt(agreed * (l.qty / totalQty))
           remaining -= lineAgreed
+          // This line's proportional share of what was actually collected --
+          // fully paid (linePaid === lineAgreed) unless the sale as a whole
+          // was left with a balance owing.
+          const linePaid = isLast ? remainingPaid : roundAmt(lineAgreed * (agreed > 0 ? totalPaid / agreed : 0))
+          remainingPaid -= linePaid
 
           await db.sales.add({
             productId: l.productId,
@@ -388,6 +428,7 @@ function SettleSheet({
             qty: l.qty,
             unitType: l.unitType,
             soldFor: lineAgreed,
+            paidAmount: linePaid,
             costAtSale: l.cost * l.qty,
             currency,
             rateAtSale: rate,
@@ -450,7 +491,7 @@ function SettleSheet({
                   onClick={() => setFocus(focus === `l:${l.key}` ? 'deal' : `l:${l.key}`)}
                   onBlur={() => commitLinePrice(l.key)}
                 >
-                  {l.priceDraft !== undefined ? l.priceDraft || '0' : l.price.toFixed(2)}
+                  {l.priceDraft !== undefined ? l.priceDraft || '0' : currency === 'LRD' ? String(Math.round(l.price)) : l.price.toFixed(2)}
                 </button>
                 <button className="rm" onClick={() => setCart((prev) => prev.filter((x) => x.key !== l.key))}>✕</button>
               </div>
@@ -462,10 +503,10 @@ function SettleSheet({
             <div className="r2">
               <span className="lb">Agreed price</span>
               <button className={`amt${focus === 'deal' ? ' arm' : ''}`} onClick={() => setFocus('deal')}>
-                {deal === '' ? items.toFixed(2) : deal || '0'}
+                {deal === '' ? (currency === 'LRD' ? String(Math.round(items)) : items.toFixed(2)) : deal || '0'}
               </button>
             </div>
-            {Math.abs(agreed - items) > 0.005 && (
+            {Math.abs(agreed - items) > balEps && (
               <div className="disc">
                 {agreed < items ? `Knocked off ${money(items - agreed, currency)}` : `Added ${money(agreed - items, currency)}`}
                 {' · '}
@@ -503,19 +544,26 @@ function SettleSheet({
             <button onClick={() => rest('lrd')}>Rest LRD</button>
             <button onClick={() => { setPayU(''); setPayL('') }}>Clear</button>
           </div>
-          <div className={`balr ${bal > 0.005 ? 'owe' : bal < -0.005 ? 'chg' : 'ok'}`}>
-            {bal > 0.005 ? `Balance ${money(bal, 'USD')}` : bal < -0.005 ? `Change ${money(-bal, 'USD')}` : 'Paid in full'}
+          <div className={`balr ${bal > balEps ? 'owe' : bal < -balEps ? 'chg' : 'ok'}`}>
+            {bal > balEps ? `Balance ${money(bal, currency)}` : bal < -balEps ? `Change ${money(-bal, currency)}` : 'Paid in full'}
           </div>
         </div>
 
         <div className="foot">
           <div className="keys">
             {['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'del'].map((k) => (
-              <button key={k} onClick={() => press(k)}>{k === 'del' ? '⌫' : k}</button>
+              <button
+                key={k}
+                onClick={() => press(k)}
+                disabled={k === '.' && armedIsLrd}
+                style={k === '.' && armedIsLrd ? { visibility: 'hidden' } : undefined}
+              >
+                {k === 'del' ? '⌫' : k}
+              </button>
             ))}
           </div>
           <button className={`go2${owing ? ' credit' : ''}`} disabled={agreed <= 0 || saving} onClick={commit}>
-            {saving ? 'Recording…' : owing ? `Record · ${money(bal, 'USD')} owing` : past ? 'Record for this day' : 'Record sale'}
+            {saving ? 'Recording…' : owing ? `Record · ${money(bal, currency)} owing` : past ? 'Record for this day' : 'Record sale'}
           </button>
         </div>
       </div>
