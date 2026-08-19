@@ -317,6 +317,25 @@ function SettleSheet({
   const [focus, setFocus] = useState<KeypadTarget>('deal')
   const [saving, setSaving] = useState(false)
   const [unitPickerFor, setUnitPickerFor] = useState<string | null>(null)
+  const [locationPickerOpen, setLocationPickerOpen] = useState(false)
+
+  // Backdrop taps and the hardware back button never discard a sale in
+  // progress -- only the explicit ✕ does, and only after confirming. A
+  // half-built cart with real money already typed in is exactly the kind
+  // of thing a stray tap outside the sheet shouldn't be able to throw away.
+  function requestClose() {
+    if (window.confirm('Throw away this sale?')) onClose()
+  }
+  useEffect(() => {
+    window.history.pushState({ ledgrSettle: true }, '')
+    const onPop = () => requestClose()
+    window.addEventListener('popstate', onPop)
+    return () => {
+      window.removeEventListener('popstate', onPop)
+      if (window.history.state?.ledgrSettle) window.history.back()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const savedUnitsRows = useLiveQuery(() => db.customUnits.orderBy('label').toArray(), [])
   const allUnits = [...UNIT_TYPES.filter((u) => u !== 'Other'), ...(savedUnitsRows ?? []).map((r) => r.label)]
@@ -460,9 +479,25 @@ function SettleSheet({
   }
 
   return (
-    <div className="sheet" onClick={onClose}>
+    <div className="sheet">
       <div className="sbox" onClick={(e) => e.stopPropagation()}>
         <div className="grab" />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 16px 8px' }}>
+          <button
+            className="btn ghost"
+            style={{ padding: '5px 12px', borderRadius: 999, letterSpacing: 0, textTransform: 'none', fontSize: 12, borderColor: 'var(--cl-line)' }}
+            onClick={() => setLocationPickerOpen(true)}
+          >
+            {location === 'myShop' ? 'My Store Floor' : 'Warehouse (Vishal)'}
+          </button>
+          <button
+            aria-label="Close without saving"
+            onClick={requestClose}
+            style={{ border: 0, background: 'none', fontSize: 20, lineHeight: 1, color: 'var(--cl-ink-3)', cursor: 'pointer', padding: 4 }}
+          >
+            ✕
+          </button>
+        </div>
         <div className="scroll">
           <div className="cart">
             {cart.map((l) => (
@@ -524,13 +559,6 @@ function SettleSheet({
             </div>
           )}
 
-          <div style={{ marginTop: 9 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
-              <button className="btn ghost" style={{ borderColor: location === 'myShop' ? 'var(--cl-amber)' : 'var(--cl-line)' }} onClick={() => setLocation('myShop')}>My Store Floor</button>
-              <button className="btn ghost" style={{ borderColor: location === 'vishalShop' ? 'var(--cl-amber)' : 'var(--cl-line)' }} onClick={() => setLocation('vishalShop')}>Warehouse (Vishal)</button>
-            </div>
-          </div>
-
           <div className="cur">
             <button className={`cb u${focus === 'usd' ? ' on' : ''}`} onClick={() => setFocus('usd')}>
               <span className="t">US dollars</span><span className={`v m${payU ? '' : ' dim'}`}>{payU || '0.00'}</span>
@@ -588,6 +616,30 @@ function SettleSheet({
                   </button>
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {locationPickerOpen && (
+        <div className="sheet" style={{ zIndex: 55 }} onClick={() => setLocationPickerOpen(false)}>
+          <div className="sbox" onClick={(e) => e.stopPropagation()}>
+            <div className="grab" />
+            <div className="scroll" style={{ paddingBottom: 16 }}>
+              <p className="eb">Which stock is this coming from?</p>
+              {([
+                ['myShop', 'My Store Floor'],
+                ['vishalShop', 'Warehouse (Vishal)'],
+              ] as [FulfillmentLocation, string][]).map(([loc, label]) => (
+                <button
+                  key={loc}
+                  className="btn ghost"
+                  style={{ marginBottom: 8, textAlign: 'left', letterSpacing: 0, textTransform: 'none', fontSize: 14, borderColor: location === loc ? 'var(--cl-amber)' : 'var(--cl-line)' }}
+                  onClick={() => { setLocation(loc); setLocationPickerOpen(false) }}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
