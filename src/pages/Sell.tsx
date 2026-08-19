@@ -45,6 +45,27 @@ interface CartLine {
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const DAY_MS = 86400000
 
+// How far the on-screen keyboard is currently covering the bottom of the
+// layout viewport -- 0 when it's closed. `100dvh` alone isn't reliable
+// enough across browsers/WebViews to keep the Settle bar above the
+// keyboard, so this tracks the actual visualViewport directly.
+function useKeyboardInset(): number {
+  const [inset, setInset] = useState(0)
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = () => setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)))
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+    }
+  }, [])
+  return inset
+}
+
 // Always includes the product name -- unlike variantDisplayLabel (which
 // drops it once a variant has a real, already-descriptive label, since
 // that's correct inside a nested per-product view), a flat cross-catalog
@@ -68,6 +89,7 @@ export default function Sell() {
   const [datePicker, setDatePicker] = useState(false)
   const [adding, setAdding] = useState<string | null>(null)
   const [settleOpen, setSettleOpen] = useState(false)
+  const keyboardInset = useKeyboardInset()
   const [date, setDate] = useState(() => {
     const preset = (location.state as { presetDate?: string } | null)?.presetDate
     return preset ?? dateKeyMonrovia(Date.now())
@@ -123,7 +145,9 @@ export default function Sell() {
 
   const results = useMemo(() => {
     const ranked = (list: Candidate[]) => [...list].sort((a, b) => (qtySoldByVariant.get(b.variant.id!) ?? 0) - (qtySoldByVariant.get(a.variant.id!) ?? 0))
-    if (!term) return ranked(allCandidates).slice(0, 7)
+    // Idle state: a 3-across grid, so cap at 9 tiles instead of the 7-row
+    // count that made sense for the old single-column list.
+    if (!term) return ranked(allCandidates).slice(0, 9)
     return ranked(allCandidates.filter((c) => itemSearchMatches(`${c.product.name} ${c.variant.label} ${c.product.category}`, term))).slice(0, 12)
   }, [term, allCandidates, qtySoldByVariant])
 
@@ -214,30 +238,72 @@ export default function Sell() {
           )}
 
           <p className="eb">{term ? 'Matches' : 'Most sold'}</p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {results.map((c) => (
-              <CatalogEntryCard
-                key={c.key}
-                title={c.label}
-                cost={c.variant.costPrice}
-                sell={c.variant.sellPrice}
-                currency={c.variant.currency}
-                unit={guessUnit(`${c.product.name} ${c.variant.label}`, c.product.category)}
-                qty={c.variant.stockMyShop + c.variant.stockVishalShop}
-                rate={rate}
-                onClick={() => add(c)}
-              />
-            ))}
-            <button className="entry" style={{ width: '100%', textAlign: 'left' }} onClick={() => setAdding(term)}>
-              <b style={{ fontSize: 14, color: 'var(--cl-amber-2)' }}>+ Add {term ? `"${term}"` : 'a new product'}</b>
-              <div style={{ fontSize: 11, color: 'var(--cl-ink-3)', marginTop: 3 }}>new item or another variant</div>
-            </button>
-          </div>
+          {term ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {results.map((c) => (
+                <CatalogEntryCard
+                  key={c.key}
+                  title={c.label}
+                  cost={c.variant.costPrice}
+                  sell={c.variant.sellPrice}
+                  currency={c.variant.currency}
+                  unit={guessUnit(`${c.product.name} ${c.variant.label}`, c.product.category)}
+                  qty={c.variant.stockMyShop + c.variant.stockVishalShop}
+                  rate={rate}
+                  onClick={() => add(c)}
+                />
+              ))}
+              <button className="entry" style={{ width: '100%', textAlign: 'left' }} onClick={() => setAdding(term)}>
+                <b style={{ fontSize: 14, color: 'var(--cl-amber-2)' }}>+ Add "{term}"</b>
+                <div style={{ fontSize: 11, color: 'var(--cl-ink-3)', marginTop: 3 }}>new item or another variant</div>
+              </button>
+            </div>
+          ) : (
+            // Idle state only -- a 3-across grid of compact tiles ranked by
+            // how often each item has actually sold, all-time. Typing a
+            // search term switches to the detailed single-column list above.
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+              {results.map((c) => (
+                <button
+                  key={c.key}
+                  onClick={() => add(c)}
+                  className="entry"
+                  style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 4, padding: 8 }}
+                >
+                  <span
+                    style={{
+                      fontSize: 12, fontWeight: 700, color: 'var(--cl-ink)', lineHeight: 1.25,
+                      display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                    }}
+                  >
+                    {c.label}
+                  </span>
+                  <span className="m" style={{ fontSize: 12, fontWeight: 700, color: 'var(--cl-ink)' }}>
+                    {money(c.variant.sellPrice, c.variant.currency)}
+                  </span>
+                  <span className="m" style={{ fontSize: 10, color: 'var(--cl-ink-3)' }}>
+                    per {guessUnit(`${c.product.name} ${c.variant.label}`, c.product.category)}
+                  </span>
+                </button>
+              ))}
+              <button
+                onClick={() => setAdding(term)}
+                className="entry"
+                style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 8 }}
+              >
+                <b style={{ fontSize: 12, color: 'var(--cl-amber-2)' }}>+ Add a new product</b>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
       {cart.length > 0 && (
-        <button className="bar" onClick={() => setSettleOpen(true)}>
+        <button
+          className="bar"
+          style={keyboardInset > 0 ? { position: 'fixed', left: 0, right: 0, bottom: keyboardInset, zIndex: 25 } : undefined}
+          onClick={() => setSettleOpen(true)}
+        >
           <span className="l">
             <b className="m">{money(items, currency)}</b>
             <small>{count} item{count === 1 ? '' : 's'}</small>
