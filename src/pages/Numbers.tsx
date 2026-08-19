@@ -12,7 +12,7 @@ import {
 import { money, dateKeyMonrovia, isLowStock, selectOnFocus, variantDisplayLabel } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
 import { fillCatalogPrices } from '../lib/catalogPriceFill'
-import { format, subDays } from 'date-fns'
+import { FillMissingCostsView } from '../components/FillMissingCostsView'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -20,21 +20,34 @@ function monroviaDayStart(ts: number): number {
   return new Date(`${dateKeyMonrovia(ts)}T00:00:00Z`).getTime()
 }
 
-// KPIs, a 14-day bar chart, best sellers and running-low, matching the
-// reference Numbers screen's layout/classes exactly. The Setup gear
-// absorbed the old standalone Settings tab (exchange rate, categories,
-// backup) plus the new editable/addable Branches list.
+function hasMissingCost(costUnknown: boolean, costPrice: number): boolean {
+  return costUnknown || !costPrice
+}
+
+type Period = 'today' | 'week' | 'month'
+const PERIOD_OPTIONS: { value: Period; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'week', label: 'This week' },
+  { value: 'month', label: 'This month' },
+]
+
+// Deliberately just five things: total revenue, profit, most sold (for
+// whichever period is picked), low stock, and a one-tap way to fill in
+// missing costs -- everything else that used to live here (the 14-day
+// chart, the USD/LRD payment split, TBS/drawer KPIs) is still reachable
+// from Book/Drawer, it just isn't cluttering the one screen meant to
+// answer "how's the shop doing" at a glance. Every metric sits in its own
+// rounded `.kpi`/`.card` container, not a wall of numbers.
 export default function Numbers() {
   const [setupOpen, setSetupOpen] = useState(false)
+  const [fillCostsOpen, setFillCostsOpen] = useState(false)
+  const [period, setPeriod] = useState<Period>('today')
   const todayStart = monroviaDayStart(Date.now())
-  const weekStart = todayStart - 6 * DAY_MS
+  const periodStart = period === 'today' ? todayStart : period === 'week' ? todayStart - 6 * DAY_MS : todayStart - 29 * DAY_MS
 
   const allSalesRaw = useLiveQuery(() => db.sales.toArray(), [])
   const allSales = useMemo(() => withoutVoided(allSalesRaw ?? []), [allSalesRaw])
-  const wk = useMemo(() => allSales.filter((s) => s.timestamp >= weekStart), [allSales, weekStart])
-
-  const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
-  const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
+  const periodSales = useMemo(() => allSales.filter((s) => s.timestamp >= periodStart), [allSales, periodStart])
 
   const products = useLiveQuery(() => db.products.toArray(), [])
   const variants = useLiveQuery(() => db.variants.toArray(), [])
@@ -48,113 +61,71 @@ export default function Numbers() {
         .sort((a, b) => a.stockMyShop - b.stockMyShop),
     [variants, productById],
   )
+  const missingCostCount = useMemo(
+    () => (variants ?? []).filter((v) => hasMissingCost(v.costUnknown, v.costPrice)).length,
+    [variants],
+  )
 
-  const rev = wk.reduce((s, l) => s + l.soldFor + (l.secondaryAmount ?? 0), 0)
-  const profit = wk.reduce((s, l) => s + profitOf(l), 0)
-  const wU = wk.filter((s) => s.currency === 'USD').reduce((s, l) => s + l.soldFor, 0) + wk.reduce((s, l) => s + (l.secondaryCurrency === 'USD' ? l.secondaryAmount ?? 0 : 0), 0)
-  const wL = wk.filter((s) => s.currency === 'LRD').reduce((s, l) => s + l.soldFor, 0) + wk.reduce((s, l) => s + (l.secondaryCurrency === 'LRD' ? l.secondaryAmount ?? 0 : 0), 0)
-  const owedTbs = allSales.filter((s) => s.tbs && !s.pickedUp).length
-
-  const cashOutWk = useLiveQuery(async () => {
-    const rows = await db.drawerCounts.where('timestamp').aboveOrEqual(weekStart).toArray()
-    return rows.reduce((sum, r) => sum + (r.outs ?? []).reduce((s, o) => s + o.amt / (o.cur === 'LRD' ? rate : 1), 0), 0)
-  }, [weekStart, rate]) ?? 0
-
-  const days = useMemo(() => {
-    const out: { key: string; label: string; rev: number }[] = []
-    for (let i = 13; i >= 0; i--) {
-      const ts = Date.now() - i * DAY_MS
-      const key = dateKeyMonrovia(ts)
-      const dayRev = allSales.filter((s) => dateKeyMonrovia(s.timestamp) === key).reduce((s, l) => s + l.soldFor + (l.secondaryAmount ?? 0), 0)
-      out.push({ key, label: format(subDays(Date.now(), i), 'd'), rev: dayRev })
-    }
-    return out
-  }, [allSales])
-  const maxDay = Math.max(...days.map((d) => d.rev), 1)
-  const todayKey = dateKeyMonrovia(Date.now())
+  const rev = periodSales.reduce((s, l) => s + l.soldFor + (l.secondaryAmount ?? 0), 0)
+  const profit = periodSales.reduce((s, l) => s + profitOf(l), 0)
 
   const topItems = useMemo(() => {
     const m = new Map<string, { qty: number; rev: number }>()
-    for (const s of wk) {
+    for (const s of periodSales) {
       const e = m.get(s.itemName) ?? { qty: 0, rev: 0 }
       e.qty += s.qty
       e.rev += s.soldFor + (s.secondaryAmount ?? 0)
       m.set(s.itemName, e)
     }
     return Array.from(m.entries()).sort((a, b) => b[1].rev - a[1].rev).slice(0, 5)
-  }, [wk])
+  }, [periodSales])
 
   return (
     <div className="cl flex min-h-[calc(100dvh-6rem)] flex-col md:min-h-[calc(100dvh-2rem)]">
       <div className="hd">
         <div>
           <h1>Numbers</h1>
-          <div className="sub">Last 7 days</div>
+          <div className="sub">How the shop's doing</div>
         </div>
         <button className="btn-s" onClick={() => setSetupOpen(true)}>⚙ Setup</button>
       </div>
 
       <div className="body">
         <div className="pad">
+          <div className="chips" style={{ paddingTop: 0, marginBottom: 4 }}>
+            {PERIOD_OPTIONS.map((opt) => (
+              <button key={opt.value} className={period === opt.value ? 'on' : ''} onClick={() => setPeriod(opt.value)}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           <div className="g2" style={{ marginTop: 4 }}>
             <div className="kpi">
-              <span className="k">Sold</span>
+              <span className="k">Total revenue</span>
               <span className="v m">{money(rev, 'USD')}</span>
-              <span className="s">{wk.length} sales</span>
+              <span className="s">{periodSales.length} sale{periodSales.length === 1 ? '' : 's'}</span>
             </div>
             <div className="kpi a">
-              <span className="k">Gross profit</span>
+              <span className="k">Profit</span>
               <span className="v m">{money(profit, 'USD')}</span>
               <span className="s">{rev ? Math.round((profit / rev) * 100) : 0}% margin</span>
             </div>
           </div>
-          <div className="g2">
-            <div className={`kpi${owedTbs > 0 ? ' r' : ''}`}>
-              <span className="k">Owed to you</span>
-              <span className="v m">{owedTbs}</span>
-              <span className="s">item{owedTbs === 1 ? '' : 's'} to supply</span>
-            </div>
-            <div className="kpi">
-              <span className="k">Given out / taken</span>
-              <span className="v m">{money(cashOutWk, 'USD')}</span>
-              <span className="s">from the drawer</span>
-            </div>
-          </div>
 
-          <p className="eb">Last 14 days</p>
-          <div className="chart">
-            {days.map((dd) => (
-              <div key={dd.key} className={`b${dd.key === todayKey ? ' on' : ''}`} style={{ height: `${Math.max(3, (dd.rev / maxDay) * 100)}%` }} title={`${dd.key} ${money(dd.rev, 'USD')}`} />
-            ))}
-          </div>
-          <div className="xax">
-            {days.map((dd, i) => <span key={dd.key}>{i % 2 === 0 ? dd.label : ''}</span>)}
-          </div>
-          <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', marginTop: 7 }}>Best day {money(maxDay, 'USD')}</p>
-
-          <p className="eb">How they paid</p>
-          <div className="card">
-            <div style={{ height: 12, display: 'flex', borderRadius: 99, overflow: 'hidden', background: 'var(--cl-line)', marginBottom: 10 }}>
-              <div style={{ width: `${(wU / ((wU + wL) || 1)) * 100}%`, background: 'var(--cl-usd)' }} />
-              <div style={{ width: `${(wL / ((wU + wL) || 1)) * 100}%`, background: 'var(--cl-lrd)' }} />
-            </div>
-            <div className="st"><span className="k">US dollars</span><span className="v m" style={{ color: 'var(--cl-usd)' }}>{money(wU, 'USD')}</span></div>
-            <div className="st"><span className="k">Liberian dollars</span><span className="v m" style={{ color: 'var(--cl-lrd)' }}>{money(wL, 'LRD')}</span></div>
-          </div>
-
-          <p className="eb">Best sellers</p>
+          <p className="eb">Most sold<span className="n"> — {period === 'today' ? 'today' : period === 'week' ? 'this week' : 'this month'}</span></p>
           <div className="card">
             {topItems.length ? topItems.map(([name, v]) => (
               <div className="st" key={name}>
                 <span className="k">{name} <span className="m" style={{ color: 'var(--cl-ink-3)' }}>{v.qty}</span></span>
                 <span className="v m">{money(v.rev, 'USD')}</span>
               </div>
-            )) : <p style={{ fontSize: 12.5, color: 'var(--cl-ink-3)', margin: 0 }}>No sales this week yet.</p>}
+            )) : <p style={{ fontSize: 12.5, color: 'var(--cl-ink-3)', margin: 0 }}>No sales in this period yet.</p>}
           </div>
 
-          <p className="eb">Running low<span className="n"> — buy more of these</span></p>
+          <p className="eb">Low stock</p>
           <div className="card">
-            {lowStockVariants.length ? lowStockVariants.slice(0, 12).map((v) => (
+            {lowStockVariants.length ? lowStockVariants.slice(0, 6).map((v) => (
               <div className="st" key={v.id}>
                 <span className="k">{v.label}</span>
                 <span className="v m" style={{ color: 'var(--cl-alarm)' }}>{v.stockMyShop} left</span>
@@ -164,10 +135,27 @@ export default function Numbers() {
           <Link to="/inventory" className="m" style={{ display: 'inline-block', marginTop: 4, fontSize: 11, fontWeight: 700, color: 'var(--cl-amber-2)' }}>
             View Stock →
           </Link>
+
+          <p className="eb" style={{ marginTop: 14 }}>Costs to fill</p>
+          <button
+            className="card"
+            style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, cursor: missingCostCount > 0 ? 'pointer' : 'default' }}
+            onClick={() => missingCostCount > 0 && setFillCostsOpen(true)}
+            disabled={missingCostCount === 0}
+          >
+            <span>
+              <span className="v m" style={{ display: 'block', fontSize: 21, color: missingCostCount > 0 ? 'var(--cl-alarm)' : 'var(--cl-ink)' }}>
+                {missingCostCount}
+              </span>
+              <span className="s" style={{ display: 'block' }}>{missingCostCount === 0 ? 'every item has a cost' : 'tap to fill them in, one at a time'}</span>
+            </span>
+            {missingCostCount > 0 && <span className="m" style={{ fontSize: 11, fontWeight: 700, color: 'var(--cl-amber-2)' }}>Fill now →</span>}
+          </button>
         </div>
       </div>
 
       {setupOpen && <SetupSheet onClose={() => setSetupOpen(false)} />}
+      {fillCostsOpen && <FillMissingCostsView onClose={() => setFillCostsOpen(false)} />}
     </div>
   )
 }

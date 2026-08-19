@@ -25,6 +25,32 @@ function otherCurrency(c: Currency): Currency {
 type FilterTab = 'all' | 'tbs' | 'owing'
 const DAY_MS = 24 * 60 * 60 * 1000
 
+// How far back to look, so Book opens onto something scannable instead of
+// every sale ever recorded. "Today" is the default -- switching ranges
+// never discards anything, it's purely a view.
+type RangeTab = 'today' | 'yesterday' | '7d' | '30d' | 'all'
+const RANGE_OPTIONS: { value: RangeTab; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: '7d', label: '7 days' },
+  { value: '30d', label: '30 days' },
+  { value: 'all', label: 'All time' },
+]
+function rangeStart(range: RangeTab): number {
+  const todayStart = new Date(dateKeyMonrovia(Date.now()) + 'T00:00:00').getTime()
+  switch (range) {
+    case 'today': return todayStart
+    case 'yesterday': return todayStart - DAY_MS
+    case '7d': return todayStart - 6 * DAY_MS
+    case '30d': return todayStart - 29 * DAY_MS
+    case 'all': return 0
+  }
+}
+function rangeEnd(range: RangeTab): number {
+  const todayStart = new Date(dateKeyMonrovia(Date.now()) + 'T00:00:00').getTime()
+  return range === 'yesterday' ? todayStart : Infinity
+}
+
 function dayLabel(key: string): string {
   const today = dateKeyMonrovia(Date.now())
   if (key === today) return 'Today'
@@ -55,6 +81,7 @@ interface OrderGroup {
 export default function Book() {
   const navigate = useNavigate()
   const [q, setQ] = useState('')
+  const [rangeTab, setRangeTab] = useState<RangeTab>('today')
   const [filterTab, setFilterTab] = useState<FilterTab>('all')
   const [editingOrderNumber, setEditingOrderNumber] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -113,8 +140,9 @@ export default function Book() {
 
   const filtered = useMemo(() => {
     let list = orders
-    if (filterTab === 'tbs') list = list.filter((o) => o.anyTbs)
-    if (filterTab === 'owing') list = list.filter((o) => o.owing > 0.005)
+    // Typing a search term looks across every order regardless of the
+    // selected range -- a range picker that silently hid the thing you
+    // just searched for would be worse than no range picker at all.
     if (q.trim()) {
       const t = q.toLowerCase()
       list = list.filter((o) => {
@@ -122,9 +150,15 @@ export default function Book() {
         if (String(o.orderNumber).includes(t)) return true
         return o.lines.some((l) => l.itemName.toLowerCase().includes(t))
       })
+    } else {
+      const start = rangeStart(rangeTab)
+      const end = rangeEnd(rangeTab)
+      list = list.filter((o) => o.timestamp >= start && o.timestamp < end)
     }
+    if (filterTab === 'tbs') list = list.filter((o) => o.anyTbs)
+    if (filterTab === 'owing') list = list.filter((o) => o.owing > 0.005)
     return list
-  }, [orders, filterTab, q])
+  }, [orders, filterTab, q, rangeTab])
 
   const days = useMemo(() => {
     const grouped = new Map<string, OrderGroup[]>()
@@ -182,7 +216,7 @@ export default function Book() {
       <div className="hd">
         <div>
           <h1>Book</h1>
-          <div className="sub">{orders.length} entries</div>
+          <div className="sub">{filtered.length} of {orders.length} entries</div>
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
           <button className="btn-s hot" onClick={() => setPicker(true)}>+ Fill a past day</button>
@@ -203,6 +237,17 @@ export default function Book() {
 
       <div className="body">
         <div className="pad">
+          {/* Which timeline is showing -- Book used to just dump every sale
+              ever recorded into one long scroll. Searching bypasses this
+              (see `filtered`) so an old order is still reachable by name. */}
+          <div className="chips" style={{ paddingTop: 4, opacity: q.trim() ? 0.4 : 1, pointerEvents: q.trim() ? 'none' : undefined }}>
+            {RANGE_OPTIONS.map((opt) => (
+              <button key={opt.value} className={rangeTab === opt.value ? 'on' : ''} onClick={() => setRangeTab(opt.value)}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           <div className="chips" style={{ paddingTop: 4 }}>
             <button className={filterTab === 'all' ? 'on' : ''} onClick={() => setFilterTab('all')}>Everything</button>
             <button className={filterTab === 'tbs' ? 'on' : ''} onClick={() => setFilterTab('tbs')}>To be supplied</button>

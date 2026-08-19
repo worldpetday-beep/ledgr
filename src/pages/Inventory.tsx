@@ -499,52 +499,27 @@ export default function Inventory() {
         </>
       }
     >
-      <div className="flex flex-col gap-4">
-        {/* Persistent top bar: search (left), Select Filtered + Move to…
-            (right) -- always visible, not gated behind a separate "select
-            mode" toggle. Wraps to two lines on narrow phones since cramming
-            all three into one literal row would clip on a 390px screen,
-            but it's one cohesive block. */}
-        <div className="flex flex-col gap-2 rounded-xl border [border-color:var(--cl-line)] [background:var(--cl-line-2)] p-2">
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 [color:var(--cl-ink-3)]" />
-              <input
-                className={shopifyInputClass + ' pl-9'}
-                placeholder="Search by product, variant, or SKU"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-            <button onClick={() => setSortSheetOpen(true)} className={shopifyIconButtonClass} aria-label="Sort by" title="Sort by">
-              <SortIcon className="h-4 w-4" />
-            </button>
-            <button onClick={() => setFilterSheetOpen(true)} className={shopifyIconButtonClass} aria-label="Filter by" title="Filter by">
-              <FilterIcon className="h-4 w-4" />
-            </button>
+      <div className="flex flex-col gap-3">
+        {/* Clean top: search + sort/filter icons, an add-product button,
+            then the real category chips -- the app's own scan/filter
+            controls (Select Filtered/Move to…) only appear once there's
+            something to act on, instead of sitting there unused. */}
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 [color:var(--cl-ink-3)]" />
+            <input
+              className={shopifyInputClass + ' pl-9'}
+              placeholder="Search by product, variant, or SKU"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={selectFiltered}
-              disabled={!query.trim()}
-              className="flex-1 rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-card)] px-3 py-1.5 text-sm font-semibold [color:var(--cl-ink)] disabled:opacity-30"
-            >
-              Select Filtered{query.trim() ? ` (${filtered.length})` : ''}
-            </button>
-            <button
-              onClick={() => setGroupSheetOpen(true)}
-              disabled={selectedIds.size === 0}
-              className="shrink-0 rounded-lg [background:var(--cl-ink)] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-30"
-            >
-              Move to…
-            </button>
-          </div>
-          {selectedIds.size > 0 && (
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="font-medium [color:var(--cl-ink)]">{selectedIds.size} selected</span>
-              <button onClick={clearSelection} className="font-medium [color:var(--cl-ink-2)]">Clear</button>
-            </div>
-          )}
+          <button onClick={() => setSortSheetOpen(true)} className={shopifyIconButtonClass} aria-label="Sort by" title="Sort by">
+            <SortIcon className="h-4 w-4" />
+          </button>
+          <button onClick={() => setFilterSheetOpen(true)} className={shopifyIconButtonClass} aria-label="Filter by" title="Filter by">
+            <FilterIcon className="h-4 w-4" />
+          </button>
         </div>
 
         <button
@@ -569,21 +544,32 @@ export default function Inventory() {
           ))}
         </div>
 
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          {CHIPS.map((chip) => (
-            <button key={chip.key} onClick={() => setActiveChip(chip.key)} className={shopifyChipClass(activeChip === chip.key)}>
-              {chip.label}
-              {chip.count > 0 ? ` (${chip.count})` : ''}
-            </button>
-          ))}
-          <button
-            onClick={() => setIsolateDeadStock((v) => !v)}
-            className={shopifyChipClass(isolateDeadStock)}
-            title="Segregate variants with zero sales in the last 60 days into a separate drawer"
-          >
-            Isolate Dead Stock
-          </button>
-        </div>
+        {(query.trim() || selectedIds.size > 0) && (
+          <div className="flex flex-col gap-2 rounded-xl border [border-color:var(--cl-line)] [background:var(--cl-line-2)] p-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={selectFiltered}
+                disabled={!query.trim()}
+                className="flex-1 rounded-lg border [border-color:var(--cl-line)] [background:var(--cl-card)] px-3 py-1.5 text-sm font-semibold [color:var(--cl-ink)] disabled:opacity-30"
+              >
+                Select Filtered{query.trim() ? ` (${filtered.length})` : ''}
+              </button>
+              <button
+                onClick={() => setGroupSheetOpen(true)}
+                disabled={selectedIds.size === 0}
+                className="shrink-0 rounded-lg [background:var(--cl-ink)] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-30"
+              >
+                Move to…
+              </button>
+            </div>
+            {selectedIds.size > 0 && (
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="font-medium [color:var(--cl-ink)]">{selectedIds.size} selected</span>
+                <button onClick={clearSelection} className="font-medium [color:var(--cl-ink-2)]">Clear</button>
+              </div>
+            )}
+          </div>
+        )}
 
         {visibleDuplicateGroups.length > 0 && (
           <div className="flex flex-col gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
@@ -757,12 +743,33 @@ export default function Inventory() {
             </div>
           </div>
 
+          <div>
+            <div className="mb-1.5 px-1 text-xs font-semibold uppercase tracking-wide [color:var(--cl-ink-3)]">Status</div>
+            <div className="flex flex-wrap gap-1.5">
+              {CHIPS.map((chip) => (
+                <button key={chip.key} onClick={() => setActiveChip(chip.key)} className={shopifyChipClass(activeChip === chip.key)}>
+                  {chip.label}
+                  {chip.count > 0 ? ` (${chip.count})` : ''}
+                </button>
+              ))}
+              <button
+                onClick={() => setIsolateDeadStock((v) => !v)}
+                className={shopifyChipClass(isolateDeadStock)}
+                title="Segregate variants with zero sales in the last 60 days into a separate drawer"
+              >
+                Isolate Dead Stock
+              </button>
+            </div>
+          </div>
+
           <div className="mt-2 flex justify-end gap-3">
             <button
               onClick={() => {
                 setCategoryFilter('All')
                 setSourceLocationFilter('all')
                 setPriceBaselineFilter('all')
+                setActiveChip('all')
+                setIsolateDeadStock(false)
               }}
               className="text-sm font-medium [color:var(--cl-ink-2)]"
             >

@@ -225,7 +225,9 @@ export default function Sell() {
       <div className="hd">
         <div>
           <h1>Sell</h1>
-          <div className="sub">{past ? 'Backdated entry' : 'Today'}</div>
+          <div className="sub">
+            {past ? `Backdated · ${formatShortDateMonrovia(new Date(`${date}T12:00:00`).getTime())} · every sale below goes on this day` : 'Today'}
+          </div>
         </div>
         <button className={`btn-s${past ? ' hot' : ''}`} onClick={() => setDatePicker(true)}>
           {past ? '⚠ ' : ''}{date === todayKey ? 'Today' : formatShortDateMonrovia(new Date(`${date}T12:00:00`).getTime())}
@@ -409,23 +411,22 @@ function SettleSheet({
   const [unitPickerFor, setUnitPickerFor] = useState<string | null>(null)
   const [locationPickerOpen, setLocationPickerOpen] = useState(false)
 
-  // Backdrop taps and the hardware back button never discard a sale in
-  // progress -- only the explicit ✕ does, and only after confirming. A
-  // half-built cart with real money already typed in is exactly the kind
-  // of thing a stray tap outside the sheet shouldn't be able to throw away.
+  // Backdrop taps never discard a sale in progress -- only the explicit ✕
+  // does, and only after confirming. A half-built cart with real money
+  // already typed in is exactly the kind of thing a stray tap outside the
+  // sheet shouldn't be able to throw away.
+  //
+  // This deliberately does NOT also intercept the hardware/browser back
+  // button via history.pushState -- an earlier version did, and pushing a
+  // synthetic history entry on top of HashRouter's own history turned out
+  // to race with the entry that carries the Sell page's backdated-day
+  // state (location.state.presetDate from Book's "Fill a past day"),
+  // occasionally popping past it and silently resetting the date back to
+  // today. Losing back-button interception is a smaller cost than
+  // silently mis-dating a backfilled sale.
   function requestClose() {
     if (window.confirm('Throw away this sale?')) onClose()
   }
-  useEffect(() => {
-    window.history.pushState({ ledgrSettle: true }, '')
-    const onPop = () => requestClose()
-    window.addEventListener('popstate', onPop)
-    return () => {
-      window.removeEventListener('popstate', onPop)
-      if (window.history.state?.ledgrSettle) window.history.back()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   const savedUnitsRows = useLiveQuery(() => db.customUnits.orderBy('label').toArray(), [])
   const allUnits = [...UNIT_TYPES.filter((u) => u !== 'Other'), ...(savedUnitsRows ?? []).map((r) => r.label)]
