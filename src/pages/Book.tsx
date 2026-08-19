@@ -82,6 +82,10 @@ export default function Book() {
   const navigate = useNavigate()
   const [q, setQ] = useState('')
   const [rangeTab, setRangeTab] = useState<RangeTab>('today')
+  // Picking an exact date (via the calendar input) overrides the range
+  // chips entirely -- "show me just August 12th" instead of only being
+  // able to pick from Today/Yesterday/7d/30d/All.
+  const [pickedDate, setPickedDate] = useState<string | null>(null)
   const [filterTab, setFilterTab] = useState<FilterTab>('all')
   const [editingOrderNumber, setEditingOrderNumber] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -150,6 +154,8 @@ export default function Book() {
         if (String(o.orderNumber).includes(t)) return true
         return o.lines.some((l) => l.itemName.toLowerCase().includes(t))
       })
+    } else if (pickedDate) {
+      list = list.filter((o) => dateKeyMonrovia(o.timestamp) === pickedDate)
     } else {
       const start = rangeStart(rangeTab)
       const end = rangeEnd(rangeTab)
@@ -158,7 +164,7 @@ export default function Book() {
     if (filterTab === 'tbs') list = list.filter((o) => o.anyTbs)
     if (filterTab === 'owing') list = list.filter((o) => o.owing > 0.005)
     return list
-  }, [orders, filterTab, q, rangeTab])
+  }, [orders, filterTab, q, rangeTab, pickedDate])
 
   const days = useMemo(() => {
     const grouped = new Map<string, OrderGroup[]>()
@@ -242,10 +248,31 @@ export default function Book() {
               (see `filtered`) so an old order is still reachable by name. */}
           <div className="chips" style={{ paddingTop: 4, opacity: q.trim() ? 0.4 : 1, pointerEvents: q.trim() ? 'none' : undefined }}>
             {RANGE_OPTIONS.map((opt) => (
-              <button key={opt.value} className={rangeTab === opt.value ? 'on' : ''} onClick={() => setRangeTab(opt.value)}>
+              <button key={opt.value} className={!pickedDate && rangeTab === opt.value ? 'on' : ''} onClick={() => { setRangeTab(opt.value); setPickedDate(null) }}>
                 {opt.label}
               </button>
             ))}
+            {/* A specific date -- native <input type="date"> so it's the
+                device's own picker, not another custom sheet to build and
+                maintain. Wrapped so tapping the pill opens the calendar. */}
+            <label
+              style={{
+                position: 'relative', display: 'inline-flex', alignItems: 'center', flex: '0 0 auto',
+                padding: '8px 13px', border: '1px solid var(--cl-line)', borderRadius: 999, cursor: 'pointer',
+                font: '700 11px Archivo, sans-serif', whiteSpace: 'nowrap',
+                background: pickedDate ? 'var(--cl-ink)' : 'var(--cl-card)',
+                color: pickedDate ? 'var(--cl-bg)' : 'var(--cl-ink-2)',
+                borderColor: pickedDate ? 'var(--cl-ink)' : 'var(--cl-line)',
+              }}
+            >
+              📅 {pickedDate ? formatShortDateMonrovia(new Date(`${pickedDate}T12:00:00`).getTime()) : 'Pick a date'}
+              <input
+                type="date"
+                value={pickedDate ?? ''}
+                onChange={(e) => setPickedDate(e.target.value || null)}
+                style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
+              />
+            </label>
           </div>
 
           <div className="chips" style={{ paddingTop: 4 }}>

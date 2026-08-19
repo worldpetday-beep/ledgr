@@ -16,6 +16,24 @@ export function usdAmountOf(sale: Sale): number {
   return 0
 }
 
+// A single blended USD figure for one sale line, for aggregates (total
+// revenue, best-sellers, profit) that need one number to sum across a mix
+// of USD- and LRD-priced sales -- adding a $10 line and an L$4000 line
+// together as raw numbers ("4010") is meaningless; this converts the LRD
+// portion at the rate actually in effect when it was recorded first.
+export function saleValueUsd(sale: Sale, currentRate: number): number {
+  const rate = sale.rateAtSale ?? currentRate
+  return usdAmountOf(sale) + lrdAmountOf(sale) / rate
+}
+
+// costAtSale is always USD (see Variant.costPrice) regardless of what
+// currency the sale itself was priced in, so profit is just the blended
+// USD sale value minus that -- no separate conversion needed on the cost
+// side.
+export function saleProfitUsd(sale: Sale, currentRate: number): number {
+  return saleValueUsd(sale, currentRate) - sale.costAtSale
+}
+
 // Missing paidAmount (every sale recorded before this field existed) reads
 // as "fully paid" -- that was the implicit assumption the whole app made
 // before balances were tracked at all, so it stays true for old records.
