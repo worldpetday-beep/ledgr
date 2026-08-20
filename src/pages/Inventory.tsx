@@ -665,6 +665,7 @@ export default function Inventory() {
                         unit={guessUnit(`${row.productName} ${row.variant.label}`, category)}
                         qty={row.variant.stockMyShop + row.variant.stockVishalShop}
                         rate={rate}
+                        highlightSell
                         onClick={() => setDetailProductId(row.productId)}
                       />
                     </div>
@@ -717,6 +718,7 @@ export default function Inventory() {
                                 unit={guessUnit(`${row.productName} ${row.variant.label}`, category)}
                                 qty={row.variant.stockMyShop + row.variant.stockVishalShop}
                                 rate={rate}
+                                highlightSell
                                 onClick={() => setDetailProductId(row.productId)}
                               />
                             </div>

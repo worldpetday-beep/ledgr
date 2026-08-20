@@ -5,9 +5,12 @@ import { money } from '../lib/format'
 // top line, "cost $X.XX -> +$Y.YY per <unit>" (the markup) on the left of
 // the second line, stock on the right. Used by both Sell (search results)
 // and Stock (the catalog list) so a SKU reads identically everywhere.
-// Price is deliberately plain ink, not the --cl-usd green used for actual
-// money-in-hand figures elsewhere (Drawer/Numbers) -- this is a catalog
-// price, not cash that's already in the till.
+// In Sell the top-right price stays plain ink (not the --cl-usd green used
+// for actual money-in-hand figures elsewhere) since it's a catalog price,
+// not cash that's already in the till -- but in Stock, `highlightSell`
+// turns it green, matching that tab's own convention of highlighting the
+// selling price as the number that matters at a glance while cost sits
+// quietly below it.
 export function CatalogEntryCard({
   title,
   cost,
@@ -16,6 +19,7 @@ export function CatalogEntryCard({
   unit,
   qty,
   rate,
+  highlightSell = false,
   onClick,
 }: {
   title: string
@@ -31,6 +35,7 @@ export function CatalogEntryCard({
   // LRD-per-USD, needed to convert the USD cost into the sell currency so
   // the markup delta below is an apples-to-apples subtraction.
   rate: number
+  highlightSell?: boolean
   onClick?: () => void
 }) {
   const Comp = onClick ? 'button' : 'div'
@@ -45,7 +50,7 @@ export function CatalogEntryCard({
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <b style={{ fontSize: 14, fontWeight: 700, color: 'var(--cl-ink)' }}>{title}</b>
-        <span className="m" style={{ flexShrink: 0, fontSize: 15, fontWeight: 700, color: 'var(--cl-ink)' }}>
+        <span className="m" style={{ flexShrink: 0, fontSize: 15, fontWeight: 700, color: highlightSell ? 'var(--cl-usd)' : 'var(--cl-ink)' }}>
           {money(sell, currency)}
         </span>
       </div>
