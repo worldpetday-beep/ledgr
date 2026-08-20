@@ -9,6 +9,7 @@ import { InvoicePopup } from '../components/InvoicePopup'
 import { dateKeyMonrovia, formatShortDateMonrovia, formatTimeMonrovia, money } from '../lib/format'
 import { collectPayment, customerLabelOf, deleteSaleLine, lrdAmountOf, markSalePickedUp, owingOf, usdAmountOf, withoutVoided } from '../lib/salesLedger'
 import { convertAmount } from '../lib/sellUnits'
+import { loadActiveDate, storeActiveDate } from '../lib/activeDate'
 
 // Converts an amount to the other currency using the rate that was in
 // effect when it was actually recorded (falls back to today's rate for
@@ -85,10 +86,20 @@ export default function Book() {
   // Picking exact dates (via the two calendar inputs) overrides the range
   // chips entirely -- "show me June 4th through June 10th" instead of only
   // being able to pick from Today/Yesterday/7d/30d/All. A single date is
-  // just a range where from === to.
-  const [pickedFrom, setPickedFrom] = useState<string | null>(null)
+  // just a range where from === to. Starts on whatever day is active in
+  // Sell/Drawer (skipped when that's just today, since the default "Today"
+  // chip already covers that) so backdated work stays lined up walking
+  // between tabs instead of having to re-pick the date in each one.
+  const [pickedFrom, setPickedFromState] = useState<string | null>(() => {
+    const active = loadActiveDate()
+    return active && active !== dateKeyMonrovia(Date.now()) ? active : null
+  })
   const [pickedTo, setPickedTo] = useState<string | null>(null)
   const pickedRange = pickedFrom ? { from: pickedFrom, to: pickedTo ?? pickedFrom } : null
+  function setPickedFrom(key: string | null) {
+    setPickedFromState(key)
+    if (key) storeActiveDate(key)
+  }
   function clearPickedRange() {
     setPickedFrom(null)
     setPickedTo(null)
@@ -364,26 +375,44 @@ export default function Book() {
                     style={{ cursor: 'pointer' }}
                     onClick={() => setInvoiceOrderNumber(order.orderNumber)}
                   >
-                    {/* Items first and prominent -- what's in the sale matters
-                        more when scanning the ledger than any other line. */}
-                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--cl-ink)', lineHeight: 1.4 }}>
-                      {order.lines.map((l, i) => (
-                        <span key={l.id}>
-                          {i > 0 && ' · '}{l.qty} {l.unitType ? `${l.unitType} ` : ''}{l.itemName}
-                          {l.tbs && !l.pickedUp && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); markSalePickedUp(l) }}
-                              style={{ marginLeft: 5, border: 0, background: 'var(--cl-amber)', borderRadius: 6, padding: '1px 6px', font: '700 9px Archivo', cursor: 'pointer', color: 'var(--cl-ink)' }}
-                            >
-                              GIVE
-                            </button>
-                          )}
+                    {/* Items on the left (truncated to 2 lines if the list
+                        runs long -- a 6-item order shouldn't blow up the
+                        card), total vertically centered on the right so
+                        it's the first thing the eye lands on next to what
+                        was actually sold. */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div
+                        style={{
+                          flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 700, color: 'var(--cl-ink)', lineHeight: 1.4,
+                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                        }}
+                      >
+                        {order.lines.map((l, i) => (
+                          <span key={l.id}>
+                            {i > 0 && ' · '}{l.qty} {l.unitType ? `${l.unitType} ` : ''}{l.itemName}
+                            {l.tbs && !l.pickedUp && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); markSalePickedUp(l) }}
+                                style={{ marginLeft: 5, border: 0, background: 'var(--cl-amber)', borderRadius: 6, padding: '1px 6px', font: '700 9px Archivo', cursor: 'pointer', color: 'var(--cl-ink)' }}
+                              >
+                                GIVE
+                              </button>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                      <span style={{ flexShrink: 0, textAlign: 'right' }}>
+                        <span className="m" style={{ display: 'block', fontSize: 16, fontWeight: 700, color: 'var(--cl-usd)' }}>
+                          {money(order.total, order.currency)}
                         </span>
-                      ))}
+                        <span className="m" style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--cl-ink-3)' }}>
+                          {money(secondary, otherCurrency(order.currency))}
+                        </span>
+                      </span>
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginTop: 5 }}>
-                      <span style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                    {(anyPendingPickup || anyPickedUp || order.owing > 0.005) && (
+                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6 }}>
                         {anyPendingPickup && <span className="pill amber">tbs</span>}
                         {anyPickedUp && !anyPendingPickup && <span className="pill grey">picked up</span>}
                         {order.owing > 0.005 && (
@@ -395,16 +424,8 @@ export default function Book() {
                             owing {money(order.owing, order.currency)} · collect
                           </button>
                         )}
-                      </span>
-                      <span style={{ textAlign: 'right' }}>
-                        <span className="m" style={{ display: 'block', fontSize: 16, fontWeight: 700, color: 'var(--cl-usd)' }}>
-                          {money(order.total, order.currency)}
-                        </span>
-                        <span className="m" style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--cl-ink-3)' }}>
-                          {money(secondary, otherCurrency(order.currency))}
-                        </span>
-                      </span>
-                    </div>
+                      </div>
+                    )}
 
                     <div
                       style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 5, fontSize: 12, color: 'var(--cl-ink-2)' }}

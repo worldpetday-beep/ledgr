@@ -20,6 +20,7 @@ import { withoutVoided } from '../lib/salesLedger'
 import { itemSearchMatches } from '../lib/itemMatch'
 import { sellUnitsOf, convertAmount } from '../lib/sellUnits'
 import { priceStatsFor } from '../lib/priceStats'
+import { loadActiveDate, storeActiveDate } from '../lib/activeDate'
 import type { SellUnit } from '../db'
 
 // One row per sell-unit, not per variant -- Zinc 14G's stock is sold both
@@ -100,10 +101,14 @@ export default function Sell() {
   const [adding, setAdding] = useState<string | null>(null)
   const [settleOpen, setSettleOpen] = useState(false)
   const keyboardInset = useKeyboardInset()
-  const [date, setDate] = useState(() => {
+  const [date, setDateState] = useState(() => {
     const preset = (location.state as { presetDate?: string } | null)?.presetDate
-    return preset ?? dateKeyMonrovia(Date.now())
+    return preset ?? loadActiveDate() ?? dateKeyMonrovia(Date.now())
   })
+  function setDate(key: string) {
+    setDateState(key)
+    storeActiveDate(key)
+  }
   const inputRef = useRef<HTMLInputElement>(null)
   const todayKey = dateKeyMonrovia(Date.now())
   const past = date !== todayKey
@@ -276,6 +281,7 @@ export default function Sell() {
                   unit={c.unit.unit}
                   qty={Math.floor((c.variant.stockMyShop + c.variant.stockVishalShop) / c.unit.factor)}
                   rate={rate}
+                  onEditCost={(next) => db.variants.update(c.variant.id!, { costPrice: next / c.unit.factor, costUnknown: false, updatedAt: Date.now() })}
                   onClick={() => add(c)}
                 />
               ))}

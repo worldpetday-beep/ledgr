@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db, DRAWER_OUT_KINDS, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type DrawerOut, type Currency } from '../db'
 import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
 import { owingUsd, paidLrdAmountOf, paidUsdAmountOf, saleValueUsd, withoutVoided } from '../lib/salesLedger'
+import { loadActiveDate, storeActiveDate } from '../lib/activeDate'
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
@@ -37,7 +38,11 @@ function AttachmentThumb({ file }: { file: Blob & { name?: string } }) {
 // out with a per-kind subtotal, counted vs expected vs difference, and a
 // close/reopen toggle.
 export default function Drawer() {
-  const [d, setD] = useState(() => dateKeyMonrovia(Date.now()))
+  const [d, setDState] = useState(() => loadActiveDate() ?? dateKeyMonrovia(Date.now()))
+  function setD(key: string) {
+    setDState(key)
+    storeActiveDate(key)
+  }
   const [pickerOpen, setPickerOpen] = useState(false)
   const todayKey = dateKeyMonrovia(Date.now())
 
@@ -140,35 +145,6 @@ export default function Drawer() {
             </div>
           )}
 
-          <p className="eb">Carried from yesterday</p>
-          <div className="card">
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
-              <div>
-                <label className="lab">USD</label>
-                <input
-                  className="in m"
-                  inputMode="decimal"
-                  value={rec?.openUsdOverride ?? ''}
-                  placeholder={String(openU)}
-                  onChange={(e) => upsert({ openUsdOverride: e.target.value === '' ? undefined : Number(e.target.value) || 0 })}
-                />
-              </div>
-              <div>
-                <label className="lab">LRD</label>
-                <input
-                  className="in m"
-                  inputMode="decimal"
-                  value={rec?.openLrdOverride ?? ''}
-                  placeholder={String(openL)}
-                  onChange={(e) => upsert({ openLrdOverride: e.target.value === '' ? undefined : Number(e.target.value) || 0 })}
-                />
-              </div>
-            </div>
-            <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', margin: '9px 0 0', lineHeight: 1.5 }}>
-              {prevRec ? "Filled in from last night's count. Type over it if the drawer started different." : 'Type what was in the drawer this morning.'}
-            </p>
-          </div>
-
           <p className="eb">Money that went out</p>
           {outs.map((o) => (
             <div className="card" key={o.id} style={{ padding: '11px 12px' }}>
@@ -270,6 +246,45 @@ export default function Drawer() {
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* Opening float, not a revenue total -- this is just what was
+              physically sitting in the drawer this morning (defaults to
+              last night's own counted total below, editable if it started
+              different). It's what "Should be there" above already adds
+              today's cash-in and subtracts money-out on top of -- it plays
+              no other part in the day's math. Shown after the actual count
+              since that's usually filled in first and this is more of a
+              reference/audit figure than something acted on daily. */}
+          <p className="eb">Carried from yesterday<span className="n"> — the opening float, not a revenue total</span></p>
+          <div className="card">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
+              <div>
+                <label className="lab">USD</label>
+                <input
+                  className="in m"
+                  inputMode="decimal"
+                  value={rec?.openUsdOverride ?? ''}
+                  placeholder={String(openU)}
+                  onChange={(e) => upsert({ openUsdOverride: e.target.value === '' ? undefined : Number(e.target.value) || 0 })}
+                />
+              </div>
+              <div>
+                <label className="lab">LRD</label>
+                <input
+                  className="in m"
+                  inputMode="decimal"
+                  value={rec?.openLrdOverride ?? ''}
+                  placeholder={String(openL)}
+                  onChange={(e) => upsert({ openLrdOverride: e.target.value === '' ? undefined : Number(e.target.value) || 0 })}
+                />
+              </div>
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', margin: '9px 0 0', lineHeight: 1.5 }}>
+              {prevRec
+                ? "Auto-filled from what you counted at the end of the last day recorded — not today's or yesterday's revenue. Type over it only if the drawer actually started with a different amount."
+                : 'Type what was physically in the drawer this morning.'}
+            </p>
           </div>
 
           <p className="eb">Attach a photo<span className="n"> — when there's only time for the total, not every line</span></p>

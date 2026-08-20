@@ -10,7 +10,6 @@ import {
   SortIcon,
   FilterIcon,
   BoxesIcon,
-  CheckSquareIcon,
   ChevronRightIcon,
   EditIcon,
 } from '../components/icons'
@@ -348,14 +347,6 @@ export default function Inventory() {
     setTransferVariantId('')
   }
 
-  function toggleSelected(id: number) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
 
   // "Select Filtered": whatever the top search bar's query currently
   // matches gets checked in one tap, instead of hand-picking each row --
@@ -646,30 +637,19 @@ export default function Inventory() {
               </div>
               <div className="flex flex-col gap-2">
                 {rows.map((row) => (
-                  <div key={`${row.productId}-${row.variant.id}`} className="flex items-center gap-2">
-                    <button
-                      onClick={() => toggleSelected(row.productId)}
-                      aria-label={selectedIds.has(row.productId) ? 'Deselect item' : 'Select item'}
-                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
-                        selectedIds.has(row.productId) ? 'border-black [background:var(--cl-ink)] text-white' : '[border-color:var(--cl-line)]'
-                      }`}
-                    >
-                      {selectedIds.has(row.productId) && <CheckSquareIcon className="h-3.5 w-3.5" />}
-                    </button>
-                    <div className="min-w-0 flex-1">
-                      <CatalogEntryCard
-                        title={skuRowLabel(row.productName, row.variant.label)}
-                        cost={row.variant.costPrice}
-                        sell={row.variant.sellPrice}
-                        currency={row.variant.currency}
-                        unit={guessUnit(`${row.productName} ${row.variant.label}`, category)}
-                        qty={row.variant.stockMyShop + row.variant.stockVishalShop}
-                        rate={rate}
-                        highlightSell
-                        onClick={() => setDetailProductId(row.productId)}
-                      />
-                    </div>
-                  </div>
+                  <CatalogEntryCard
+                    key={`${row.productId}-${row.variant.id}`}
+                    title={skuRowLabel(row.productName, row.variant.label)}
+                    cost={row.variant.costPrice}
+                    sell={row.variant.sellPrice}
+                    currency={row.variant.currency}
+                    unit={guessUnit(`${row.productName} ${row.variant.label}`, category)}
+                    qty={row.variant.stockMyShop + row.variant.stockVishalShop}
+                    rate={rate}
+                    highlightSell
+                    onEditCost={(next) => db.variants.update(row.variant.id!, { costPrice: next, costUnknown: false, updatedAt: Date.now() })}
+                    onClick={() => setDetailProductId(row.productId)}
+                  />
                 ))}
               </div>
             </div>
@@ -699,30 +679,19 @@ export default function Inventory() {
                       </div>
                       <div className="flex flex-col gap-2">
                         {rows.map((row) => (
-                          <div key={`${row.productId}-${row.variant.id}`} className="flex items-center gap-2">
-                            <button
-                              onClick={() => toggleSelected(row.productId)}
-                              aria-label={selectedIds.has(row.productId) ? 'Deselect item' : 'Select item'}
-                              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
-                                selectedIds.has(row.productId) ? 'border-black [background:var(--cl-ink)] text-white' : '[border-color:var(--cl-line)]'
-                              }`}
-                            >
-                              {selectedIds.has(row.productId) && <CheckSquareIcon className="h-3.5 w-3.5" />}
-                            </button>
-                            <div className="min-w-0 flex-1">
-                              <CatalogEntryCard
-                                title={skuRowLabel(row.productName, row.variant.label)}
-                                cost={row.variant.costPrice}
-                                sell={row.variant.sellPrice}
-                                currency={row.variant.currency}
-                                unit={guessUnit(`${row.productName} ${row.variant.label}`, category)}
-                                qty={row.variant.stockMyShop + row.variant.stockVishalShop}
-                                rate={rate}
-                                highlightSell
-                                onClick={() => setDetailProductId(row.productId)}
-                              />
-                            </div>
-                          </div>
+                          <CatalogEntryCard
+                            key={`${row.productId}-${row.variant.id}`}
+                            title={skuRowLabel(row.productName, row.variant.label)}
+                            cost={row.variant.costPrice}
+                            sell={row.variant.sellPrice}
+                            currency={row.variant.currency}
+                            unit={guessUnit(`${row.productName} ${row.variant.label}`, category)}
+                            qty={row.variant.stockMyShop + row.variant.stockVishalShop}
+                            rate={rate}
+                            highlightSell
+                            onEditCost={(next) => db.variants.update(row.variant.id!, { costPrice: next, costUnknown: false, updatedAt: Date.now() })}
+                            onClick={() => setDetailProductId(row.productId)}
+                          />
                         ))}
                       </div>
                     </div>
