@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, profitOf, type Product, type Sale, type Variant } from '../db'
+import { db, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type Product, type Sale, type Variant } from '../db'
 import { BottomSheet } from './ui'
 import { AlertIcon, TrashIcon, SearchIcon } from './icons'
 import { money, formatDateTimeMonrovia, selectOnFocus } from '../lib/format'
-import { lrdAmountOf, usdAmountOf, deleteSaleLine, editSaleLine, relinkSaleLine } from '../lib/salesLedger'
+import { lrdAmountOf, usdAmountOf, deleteSaleLine, editSaleLine, relinkSaleLine, saleValueUsd } from '../lib/salesLedger'
 
 export interface InvoiceOrder {
   orderNumber: number
@@ -221,6 +221,8 @@ function InvoiceLineEditor({ sale, stock }: { sale: Sale; stock: number | null }
 // can be fixed without leaving the popup.
 export function InvoicePopup({ order, dailyIndex, onClose }: { order: InvoiceOrder | null; dailyIndex: number; onClose: () => void }) {
   const [customerName, setCustomerName] = useState('')
+  const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
+  const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
 
   useEffect(() => {
     setCustomerName(order?.customerName ?? '')
@@ -249,13 +251,24 @@ export function InvoicePopup({ order, dailyIndex, onClose }: { order: InvoiceOrd
   // usdAmountOf/lrdAmountOf already pull the right amount out of a line
   // whichever side (primary or split-paid secondary) it's actually in --
   // summing sale.soldFor directly here would silently drop a line's LRD
-  // portion whenever USD was its primary currency (or the reverse).
+  // portion whenever USD was its primary currency (or the reverse). Never
+  // merged into one number: the pair is shown as typed, "$60.00 + L$4,000".
   const soldUsd = order.lines.reduce((s, l) => s + usdAmountOf(l), 0)
   const soldLrd = order.lines.reduce((s, l) => s + lrdAmountOf(l), 0)
-  const costUsd = order.lines.filter((l) => l.currency === 'USD').reduce((s, l) => s + l.costAtSale, 0)
-  const costLrd = order.lines.filter((l) => l.currency === 'LRD').reduce((s, l) => s + l.costAtSale, 0)
-  const profitUsd = order.lines.filter((l) => l.currency === 'USD').reduce((s, l) => s + profitOf(l), 0)
-  const profitLrd = order.lines.filter((l) => l.currency === 'LRD').reduce((s, l) => s + profitOf(l), 0)
+  // Cost is always USD (see Variant.costPrice) regardless of the sale's own
+  // currency -- bucketing it by sale.currency used to silently relabel a
+  // real USD cost as an LRD one for every LRD-priced sale.
+  const costTotal = order.lines.reduce((s, l) => s + l.costAtSale, 0)
+  // Profit is one number, in USD -- both sides of the pair converted at the
+  // rate that was actually in effect on each line, never per-currency
+  // ("$X + L$0" implied the LRD half of a payment was worthless, which is
+  // exactly the bug that made a real +$6.05 sale read as -$15.00). Lines
+  // with no cost entered are excluded rather than counted as pure profit.
+  const costedLines = order.lines.filter((l) => l.costAtSale > 0)
+  const excludedLines = order.lines.length - costedLines.length
+  const costedRevenueUsd = costedLines.reduce((s, l) => s + saleValueUsd(l, rate), 0)
+  const profitUsdTotal = costedLines.reduce((s, l) => s + (saleValueUsd(l, rate) - l.costAtSale), 0)
+  const marginPct = costedRevenueUsd > 0 ? Math.round((profitUsdTotal / costedRevenueUsd) * 100) : 0
 
   return (
     <BottomSheet open={order != null} onClose={onClose} contentClassName="![background:var(--cl-card)] ![color:var(--cl-ink)]">
@@ -305,18 +318,20 @@ export function InvoicePopup({ order, dailyIndex, onClose }: { order: InvoiceOrd
             <div className="flex items-center justify-between">
               <span className="[color:var(--cl-ink-2)]">Cost total</span>
               <span className="tabular font-medium [color:var(--cl-ink)]">
-                {costUsd > 0 && money(costUsd, 'USD')}
-                {costUsd > 0 && costLrd > 0 && ' + '}
-                {costLrd > 0 && money(costLrd, 'LRD')}
-                {costUsd <= 0 && costLrd <= 0 && '—'}
+                {costTotal > 0 ? money(costTotal, 'USD') : '—'}
               </span>
             </div>
             <div className="mt-1 flex items-center justify-between border-t [border-color:var(--cl-line)] pt-1.5">
               <span className="font-semibold [color:var(--cl-ink)]">Net profit</span>
               <span className="tabular font-bold text-green-700">
-                {money(profitUsd, 'USD')} + {money(profitLrd, 'LRD')}
+                {money(profitUsdTotal, 'USD')}{costedRevenueUsd > 0 && ` (${marginPct}%)`}
               </span>
             </div>
+            {excludedLines > 0 && (
+              <p className="mt-1 text-xs [color:var(--cl-ink-3)]">
+                {excludedLines} line{excludedLines === 1 ? '' : 's'} excluded from profit — no cost price set.
+              </p>
+            )}
           </div>
         </div>
       </div>

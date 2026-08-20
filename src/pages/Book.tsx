@@ -11,18 +11,6 @@ import { collectPayment, customerLabelOf, deleteSaleLine, lrdAmountOf, markSaleP
 import { convertAmount } from '../lib/sellUnits'
 import { loadActiveDate, storeActiveDate } from '../lib/activeDate'
 
-// Converts an amount to the other currency using the rate that was in
-// effect when it was actually recorded (falls back to today's rate for
-// sales predating that field) -- never re-prices an old sale at today's
-// rate.
-function secondaryAmountOf(amount: number, currency: Currency, rateAtSale: number | undefined, currentRate: number) {
-  const rate = rateAtSale ?? currentRate
-  return currency === 'USD' ? amount * rate : amount / rate
-}
-function otherCurrency(c: Currency): Currency {
-  return c === 'USD' ? 'LRD' : 'USD'
-}
-
 type FilterTab = 'all' | 'tbs' | 'owing'
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -66,6 +54,11 @@ interface OrderGroup {
   customerName?: string
   lines: Sale[]
   anyTbs: boolean
+  // The pair, exactly as typed/paid -- never merged into one number for
+  // display. `total` (converted, one number) exists only as a smaller,
+  // secondary figure underneath the real pair.
+  sumUsd: number
+  sumLrd: number
   total: number
   owing: number
   currency: Currency
@@ -132,13 +125,16 @@ export default function Book() {
       customerName: lines.find((l) => l.customerName)?.customerName,
       lines,
       anyTbs: lines.some((l) => l.tbs),
-      // A line can be split-paid across both currencies (usdAmountOf/
-      // lrdAmountOf pull out each side correctly regardless of which one
-      // was primary) -- naively adding soldFor + secondaryAmount together
-      // used to blend two different currencies into one raw number
-      // (e.g. "$50 + L$1000" read as "$1050"). Convert each side into the
-      // order's own currency, at the rate that was actually in effect for
-      // that line, before summing.
+      // The pair as actually typed/paid, added straight across every line
+      // in the order -- shown as the card's headline, never blended.
+      sumUsd: lines.reduce((s, l) => s + usdAmountOf(l), 0),
+      sumLrd: lines.reduce((s, l) => s + lrdAmountOf(l), 0),
+      // A converted single number, only ever shown smaller/greyer beneath
+      // the real pair above -- naively adding soldFor + secondaryAmount
+      // together used to blend two different currencies into one raw
+      // number (e.g. "$50 + L$1000" read as "$1050"). Convert each side
+      // into the order's own currency, at the rate that was actually in
+      // effect for that line, before summing.
       total: lines.reduce((s, l) => {
         const lineRate = l.rateAtSale ?? rate
         const usdPart = usdAmountOf(l)
@@ -340,25 +336,23 @@ export default function Book() {
           )}
 
           {days.map(([key, ss]) => {
-            const dayByCurrency = ss.reduce((acc, o) => {
-              acc[o.currency] = (acc[o.currency] ?? 0) + o.total
-              return acc
-            }, {} as Record<Currency, number>)
-            const dayCurrencies = (Object.keys(dayByCurrency) as Currency[]).filter((c) => dayByCurrency[c] > 0)
+            // The day's pair -- straight sum of every order's raw
+            // paidUSD/paidLRD, never blended -- with one converted USD
+            // total (at each order's own rate) shown small beneath.
+            const dayUsd = ss.reduce((s, o) => s + o.sumUsd, 0)
+            const dayLrd = ss.reduce((s, o) => s + o.sumLrd, 0)
+            const dayConverted = ss.reduce((s, o) => s + convertAmount(o.total, o.currency, 'USD', o.rateAtSale ?? rate), 0)
             return (
             <div key={key}>
               <div className="day" style={{ alignItems: 'flex-start' }}>
                 <span className="d">{dayLabel(key)}</span>
                 <span style={{ textAlign: 'right' }}>
-                  {dayCurrencies.length === 0 && <span className="t m">{money(0, 'USD')}</span>}
-                  {dayCurrencies.map((c, i) => (
-                    <span key={c} className="t m" style={{ display: 'block' }}>
-                      {i > 0 ? '+ ' : ''}{money(dayByCurrency[c], c)}
-                    </span>
-                  ))}
-                  {dayCurrencies.length === 1 && (
+                  {dayUsd <= 0 && dayLrd <= 0 && <span className="t m">{money(0, 'USD')}</span>}
+                  {dayUsd > 0 && <span className="t m" style={{ display: 'block' }}>{money(dayUsd, 'USD')}</span>}
+                  {dayLrd > 0 && <span className="t m" style={{ display: 'block' }}>{dayUsd > 0 ? '+ ' : ''}{money(dayLrd, 'LRD')}</span>}
+                  {(dayUsd > 0 || dayLrd > 0) && (
                     <span className="m" style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--cl-ink-3)' }}>
-                      {money(secondaryAmountOf(dayByCurrency[dayCurrencies[0]], dayCurrencies[0], undefined, rate), otherCurrency(dayCurrencies[0]))}
+                      {money(dayConverted, 'USD')} total
                     </span>
                   )}
                 </span>
@@ -367,7 +361,6 @@ export default function Book() {
                 const label = customerLabelOf(order)
                 const anyPendingPickup = order.lines.some((l) => l.tbs && !l.pickedUp)
                 const anyPickedUp = order.lines.some((l) => l.tbs && l.pickedUp)
-                const secondary = secondaryAmountOf(order.total, order.currency, order.rateAtSale, rate)
                 return (
                   <div
                     key={order.orderNumber}
@@ -375,18 +368,12 @@ export default function Book() {
                     style={{ cursor: 'pointer' }}
                     onClick={() => setInvoiceOrderNumber(order.orderNumber)}
                   >
-                    {/* Items on the left (truncated to 2 lines if the list
-                        runs long -- a 6-item order shouldn't blow up the
-                        card), total vertically centered on the right so
-                        it's the first thing the eye lands on next to what
-                        was actually sold. */}
+                    {/* Items on the left, total vertically centered on the
+                        right. Names never truncate -- no line-clamp, no
+                        ellipsis -- a long item list just wraps and grows
+                        the card instead of clipping. */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div
-                        style={{
-                          flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 700, color: 'var(--cl-ink)', lineHeight: 1.4,
-                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                        }}
-                      >
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: 'var(--cl-ink)', lineHeight: 1.45 }}>
                         {order.lines.map((l, i) => (
                           <span key={l.id}>
                             {i > 0 && ' · '}{l.qty} {l.unitType ? `${l.unitType} ` : ''}{l.itemName}
@@ -401,12 +388,18 @@ export default function Book() {
                           </span>
                         ))}
                       </div>
+                      {/* The pair as actually paid -- headline, green, never
+                          blended -- with the converted single number small
+                          and grey beneath it as a secondary reference only. */}
                       <span style={{ flexShrink: 0, textAlign: 'right' }}>
-                        <span className="m" style={{ display: 'block', fontSize: 16, fontWeight: 700, color: 'var(--cl-usd)' }}>
-                          {money(order.total, order.currency)}
+                        <span className="m" style={{ display: 'block', fontSize: 15, fontWeight: 700, color: 'var(--cl-usd)' }}>
+                          {order.sumUsd > 0 && money(order.sumUsd, 'USD')}
+                          {order.sumUsd > 0 && order.sumLrd > 0 && <br />}
+                          {order.sumLrd > 0 && money(order.sumLrd, 'LRD')}
+                          {order.sumUsd <= 0 && order.sumLrd <= 0 && money(0, order.currency)}
                         </span>
-                        <span className="m" style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--cl-ink-3)' }}>
-                          {money(secondary, otherCurrency(order.currency))}
+                        <span className="m" style={{ display: 'block', fontSize: 10.5, fontWeight: 500, color: 'var(--cl-ink-3)', marginTop: 2 }}>
+                          {money(order.total, order.currency)} total
                         </span>
                       </span>
                     </div>

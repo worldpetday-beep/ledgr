@@ -369,6 +369,17 @@ db.version(7)
 export const EXCHANGE_RATE_KEY = 'exchangeRateLrdPerUsd'
 export const DEFAULT_EXCHANGE_RATE = 180
 
+// A history of every rate the shop has used, not just the current one --
+// EXCHANGE_RATE_KEY above still holds the current/latest rate (everything
+// that just needs "today's rate" keeps reading that directly), but this
+// list is the record of when it changed, shown in Setup and used to seed
+// Sale.rateAtSale for sales recorded before that field existed.
+export const RATE_HISTORY_KEY = 'exchangeRateHistory'
+export interface RateHistoryEntry {
+  effectiveFrom: string // yyyy-MM-dd, Monrovia-local
+  rate: number
+}
+
 export function profitOf(sale: Sale): number {
   return sale.soldFor - sale.costAtSale
 }

@@ -147,7 +147,11 @@
 .cl .st .k { font-size: 12.5px; color: var(--cl-ink-2); font-weight: 600; }
 .cl .st .v { font: 700 14px 'IBM Plex Mono', monospace; }
 .cl .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-bottom: 10px; }
-.cl .kpi { background: var(--cl-card); border: 1px solid var(--cl-line); border-radius: 13px; padding: 12px 13px; }
+/* flex-column so .k/.v/.s (plain <span>s) actually stack -- as inline
+   elements their margin-top did nothing, so long content (a KPI with a
+   longer sub-label, or a larger Android font size) ran label/value/sub-
+   label together on one line instead of three. */
+.cl .kpi { display: flex; flex-direction: column; background: var(--cl-card); border: 1px solid var(--cl-line); border-radius: 13px; padding: 12px 13px; min-width: 0; overflow-wrap: break-word; }
 .cl .kpi .k { font: 700 9.5px Archivo, sans-serif; letter-spacing: .13em; text-transform: uppercase; color: var(--cl-ink-3); }
 .cl .kpi .v { font: 700 21px 'IBM Plex Mono', monospace; margin-top: 4px; line-height: 1.05; }
 .cl .kpi .s { font-size: 11px; color: var(--cl-ink-2); margin-top: 3px; }
