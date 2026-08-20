@@ -26,7 +26,7 @@ import {
   shopifyChipClass,
   shopifyIconButtonClass,
 } from '../components/ShopifyShell'
-import { isLowStock, selectOnFocus, variantDisplayLabel } from '../lib/format'
+import { dateKeyMonrovia, formatShortDateMonrovia, isLowStock, selectOnFocus, variantDisplayLabel } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
 import { familySortKey } from '../lib/itemMatch'
 import { reorderVariantLabel, formatMattressLabel, guessCategory, MATTRESS_NAME_RE } from '../lib/catalogCleanup'
@@ -81,6 +81,11 @@ export default function Inventory() {
   const [query, setQuery] = useState('')
   const [activeChip, setActiveChip] = useState<Chip>('all')
   const [sortBy, setSortBy] = useState<SortBy>('name')
+  // Sales Velocity normally ranks by all-time qty sold -- picking an exact
+  // date range (e.g. June 4th - 10th) narrows that to just what actually
+  // sold in that window instead.
+  const [velocityFrom, setVelocityFrom] = useState<string | null>(null)
+  const [velocityTo, setVelocityTo] = useState<string | null>(null)
 
   const [sortSheetOpen, setSortSheetOpen] = useState(false)
   const [filterSheetOpen, setFilterSheetOpen] = useState(false)
@@ -190,13 +195,19 @@ export default function Inventory() {
   const allSalesRaw = useLiveQuery(() => db.sales.toArray(), [])
   const allSales = useMemo(() => withoutVoided(allSalesRaw ?? []), [allSalesRaw])
   const salesQtyByProduct = useMemo(() => {
+    const from = velocityFrom && velocityTo && velocityTo < velocityFrom ? velocityTo : velocityFrom
+    const to = velocityFrom && velocityTo && velocityTo < velocityFrom ? velocityFrom : (velocityTo ?? velocityFrom)
     const map = new Map<number, number>()
     for (const s of allSales ?? []) {
       if (s.productId == null) continue
+      if (from) {
+        const key = dateKeyMonrovia(s.timestamp)
+        if (key < from || key > (to ?? from)) continue
+      }
       map.set(s.productId, (map.get(s.productId) ?? 0) + s.qty)
     }
     return map
-  }, [allSales])
+  }, [allSales, velocityFrom, velocityTo])
   const recentSaleVariantIds = useMemo(() => {
     const cutoff = Date.now() - DEAD_STOCK_WINDOW_MS
     const set = new Set<number>()
@@ -543,6 +554,41 @@ export default function Inventory() {
             </button>
           ))}
         </div>
+
+        {sortBy === 'salesVelocity' && (
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            <span className="shrink-0 text-xs font-semibold [color:var(--cl-ink-3)]">Velocity range</span>
+            <label
+              className="relative inline-flex shrink-0 cursor-pointer items-center rounded-full border px-3 py-1.5 text-xs font-bold"
+              style={{
+                borderColor: velocityFrom ? 'var(--cl-ink)' : 'var(--cl-line)',
+                background: velocityFrom ? 'var(--cl-ink)' : 'var(--cl-card)',
+                color: velocityFrom ? 'white' : 'var(--cl-ink-2)',
+              }}
+            >
+              From {velocityFrom ? formatShortDateMonrovia(new Date(`${velocityFrom}T12:00:00`).getTime()) : 'all time'}
+              <input type="date" value={velocityFrom ?? ''} onChange={(e) => setVelocityFrom(e.target.value || null)} className="absolute inset-0 cursor-pointer opacity-0" />
+            </label>
+            <label
+              className="relative inline-flex shrink-0 items-center rounded-full border px-3 py-1.5 text-xs font-bold"
+              style={{
+                borderColor: velocityTo ? 'var(--cl-ink)' : 'var(--cl-line)',
+                background: velocityTo ? 'var(--cl-ink)' : 'var(--cl-card)',
+                color: velocityTo ? 'white' : 'var(--cl-ink-2)',
+                cursor: velocityFrom ? 'pointer' : 'default',
+                opacity: velocityFrom ? 1 : 0.4,
+              }}
+            >
+              To {velocityTo ? formatShortDateMonrovia(new Date(`${velocityTo}T12:00:00`).getTime()) : velocityFrom ? 'same day' : '…'}
+              <input type="date" disabled={!velocityFrom} value={velocityTo ?? ''} onChange={(e) => setVelocityTo(e.target.value || null)} className="absolute inset-0 cursor-pointer opacity-0" />
+            </label>
+            {velocityFrom && (
+              <button onClick={() => { setVelocityFrom(null); setVelocityTo(null) }} className="shrink-0 text-xs font-semibold [color:var(--cl-ink-3)]">
+                ✕ Clear
+              </button>
+            )}
+          </div>
+        )}
 
         {(query.trim() || selectedIds.size > 0) && (
           <div className="flex flex-col gap-2 rounded-xl border [border-color:var(--cl-line)] [background:var(--cl-line-2)] p-2">
