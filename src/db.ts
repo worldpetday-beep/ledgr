@@ -141,6 +141,13 @@ export interface Sale {
   // voided instead so historical data is always recoverable/auditable.
   // Every read path across the app filters these out of totals/lists.
   voidedAt?: number
+  // A payoff line, created by collectPayment() when someone clears an old
+  // balance -- its own dated entry (today, not the day the goods went
+  // out), always fully paid, no product/cost attached. Counts as cash
+  // collected but never as goods sold: excluded from "Sold"/"Goods sold"/
+  // profit/most-sold aggregates everywhere, since the goods were already
+  // counted as sold the day they actually left.
+  isPayoff?: boolean
 }
 
 export interface Category {
@@ -181,9 +188,10 @@ export interface DrawerCount {
   outboundUsd?: number
   outboundLrd?: number
   outs?: DrawerOut[]
-  // Editable override for "what the drawer opened with" -- defaults to the
-  // previous day's counted total when absent, but can be typed over if the
-  // drawer actually started different.
+  // Legacy: an editable "what the till opened with" override. Drawer 1 (the
+  // till) no longer has an opening float at all -- it starts empty every
+  // morning -- so these are only kept so old records that still have a
+  // value don't silently lose it; nothing new writes to them.
   openUsdOverride?: number
   openLrdOverride?: number
   closed?: boolean
@@ -192,6 +200,20 @@ export interface DrawerCount {
   // picture rather than itemize every line. Any file type is accepted, not
   // just images (e.g. a scanned PDF), so this isn't restricted to photos.
   attachments?: Blob[]
+
+  // Drawer 2, the safe -- carries a running balance across days instead of
+  // resetting daily like the till does. safeOpenOverride is this day's
+  // starting balance, editable if it actually started different (absent =
+  // computed by walking every prior day's sweep/withdrawal activity, same
+  // idea as the till's old opening float used to work -- just moved to the
+  // safe, where an opening balance actually makes sense). swept*/safeOuts
+  // are this day's own activity: money moved in from the till, and money
+  // taken out of the safe (for any purpose, written at day's end).
+  safeOpenUsdOverride?: number
+  safeOpenLrdOverride?: number
+  sweptUsd?: number
+  sweptLrd?: number
+  safeOuts?: DrawerOut[]
 }
 
 export type WarehouseLedgerDirection = 'in' | 'out' // in = received from source; out = sent to source

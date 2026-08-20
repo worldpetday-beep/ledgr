@@ -10,34 +10,27 @@ import { dateKeyMonrovia, formatShortDateMonrovia, formatTimeMonrovia, money } f
 import { collectPayment, customerLabelOf, deleteSaleLine, lrdAmountOf, markSalePickedUp, owingOf, usdAmountOf, withoutVoided } from '../lib/salesLedger'
 import { convertAmount } from '../lib/sellUnits'
 import { loadActiveDate, storeActiveDate } from '../lib/activeDate'
+import { DateCalendarPicker } from '../components/DateCalendarPicker'
 
 type FilterTab = 'all' | 'tbs' | 'owing'
 const DAY_MS = 24 * 60 * 60 * 1000
 
-// How far back to look, so Book opens onto something scannable instead of
-// every sale ever recorded. "Today" is the default -- switching ranges
-// never discards anything, it's purely a view.
-type RangeTab = 'today' | 'yesterday' | '7d' | '30d' | 'all'
+// Three small shortcuts, plus the calendar (From/To) for anything else --
+// so Book opens onto something scannable instead of every sale ever
+// recorded, without a long chip row of relative ranges to choose from.
+type RangeTab = 'today' | 'week' | 'month'
 const RANGE_OPTIONS: { value: RangeTab; label: string }[] = [
   { value: 'today', label: 'Today' },
-  { value: 'yesterday', label: 'Yesterday' },
-  { value: '7d', label: '7 days' },
-  { value: '30d', label: '30 days' },
-  { value: 'all', label: 'All time' },
+  { value: 'week', label: 'This week' },
+  { value: 'month', label: 'This month' },
 ]
 function rangeStart(range: RangeTab): number {
   const todayStart = new Date(dateKeyMonrovia(Date.now()) + 'T00:00:00').getTime()
   switch (range) {
     case 'today': return todayStart
-    case 'yesterday': return todayStart - DAY_MS
-    case '7d': return todayStart - 6 * DAY_MS
-    case '30d': return todayStart - 29 * DAY_MS
-    case 'all': return 0
+    case 'week': return todayStart - 6 * DAY_MS
+    case 'month': return todayStart - 29 * DAY_MS
   }
-}
-function rangeEnd(range: RangeTab): number {
-  const todayStart = new Date(dateKeyMonrovia(Date.now()) + 'T00:00:00').getTime()
-  return range === 'yesterday' ? todayStart : Infinity
 }
 
 function dayLabel(key: string): string {
@@ -88,6 +81,8 @@ export default function Book() {
     return active && active !== dateKeyMonrovia(Date.now()) ? active : null
   })
   const [pickedTo, setPickedTo] = useState<string | null>(null)
+  const [fromCalendarOpen, setFromCalendarOpen] = useState(false)
+  const [toCalendarOpen, setToCalendarOpen] = useState(false)
   const pickedRange = pickedFrom ? { from: pickedFrom, to: pickedTo ?? pickedFrom } : null
   function setPickedFrom(key: string | null) {
     setPickedFromState(key)
@@ -110,6 +105,7 @@ export default function Book() {
   const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
   const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
   const [cardMenuFor, setCardMenuFor] = useState<number | null>(null)
+  const salesDates = useMemo(() => new Set(allSales.map((s) => dateKeyMonrovia(s.timestamp))), [allSales])
 
   const orders = useMemo(() => {
     const map = new Map<number, Sale[]>()
@@ -177,8 +173,7 @@ export default function Book() {
       })
     } else {
       const start = rangeStart(rangeTab)
-      const end = rangeEnd(rangeTab)
-      list = list.filter((o) => o.timestamp >= start && o.timestamp < end)
+      list = list.filter((o) => o.timestamp >= start)
     }
     if (filterTab === 'tbs') list = list.filter((o) => o.anyTbs)
     if (filterTab === 'owing') list = list.filter((o) => o.owing > 0.005)
@@ -231,7 +226,7 @@ export default function Book() {
   async function submitCollect() {
     if (!collectingOrder) return
     const amt = Number(collectAmount) || 0
-    if (amt > 0) await collectPayment(collectingOrder.lines, Math.min(amt, collectingOrder.owing))
+    if (amt > 0) await collectPayment(collectingOrder, Math.min(amt, collectingOrder.owing), rate)
     setCollectingOrderNumber(null)
     setCollectAmount('')
   }
@@ -264,61 +259,58 @@ export default function Book() {
         <div className="pad">
           {/* Which timeline is showing -- Book used to just dump every sale
               ever recorded into one long scroll. Searching bypasses this
-              (see `filtered`) so an old order is still reachable by name. */}
+              (see `filtered`) so an old order is still reachable by name.
+              Today/This week/This month as quick shortcuts, plus a real
+              calendar (From/To) for anything else -- marks days with no
+              sales recorded so it doubles as "what do I still owe an
+              entry for". */}
           <div className="chips" style={{ paddingTop: 4, opacity: q.trim() ? 0.4 : 1, pointerEvents: q.trim() ? 'none' : undefined }}>
             {RANGE_OPTIONS.map((opt) => (
               <button key={opt.value} className={!pickedRange && rangeTab === opt.value ? 'on' : ''} onClick={() => { setRangeTab(opt.value); clearPickedRange() }}>
                 {opt.label}
               </button>
             ))}
-          </div>
-
-          {/* An exact date range (e.g. June 4th through June 10th), not
-              just the relative chips above -- two native <input
-              type="date">s so it's the device's own calendar picker, not
-              another custom sheet. A single day is just from === to. */}
-          <div className="chips" style={{ paddingTop: 0, opacity: q.trim() ? 0.4 : 1, pointerEvents: q.trim() ? 'none' : undefined }}>
-            <label
+            <button
+              onClick={() => setFromCalendarOpen(true)}
               style={{
-                position: 'relative', display: 'inline-flex', alignItems: 'center', flex: '0 0 auto',
-                padding: '8px 13px', border: '1px solid var(--cl-line)', borderRadius: 999, cursor: 'pointer',
-                font: '700 11px Archivo, sans-serif', whiteSpace: 'nowrap',
                 background: pickedFrom ? 'var(--cl-ink)' : 'var(--cl-card)',
                 color: pickedFrom ? 'var(--cl-bg)' : 'var(--cl-ink-2)',
                 borderColor: pickedFrom ? 'var(--cl-ink)' : 'var(--cl-line)',
               }}
             >
               📅 From {pickedFrom ? formatShortDateMonrovia(new Date(`${pickedFrom}T12:00:00`).getTime()) : '…'}
-              <input
-                type="date"
-                value={pickedFrom ?? ''}
-                onChange={(e) => setPickedFrom(e.target.value || null)}
-                style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
-              />
-            </label>
-            <label
+            </button>
+            <button
+              onClick={() => pickedFrom && setToCalendarOpen(true)}
+              disabled={!pickedFrom}
               style={{
-                position: 'relative', display: 'inline-flex', alignItems: 'center', flex: '0 0 auto',
-                padding: '8px 13px', border: '1px solid var(--cl-line)', borderRadius: 999, cursor: pickedFrom ? 'pointer' : 'default',
-                font: '700 11px Archivo, sans-serif', whiteSpace: 'nowrap', opacity: pickedFrom ? 1 : 0.4,
+                opacity: pickedFrom ? 1 : 0.4,
                 background: pickedTo ? 'var(--cl-ink)' : 'var(--cl-card)',
                 color: pickedTo ? 'var(--cl-bg)' : 'var(--cl-ink-2)',
                 borderColor: pickedTo ? 'var(--cl-ink)' : 'var(--cl-line)',
               }}
             >
               To {pickedTo ? formatShortDateMonrovia(new Date(`${pickedTo}T12:00:00`).getTime()) : pickedFrom ? 'same day' : '…'}
-              <input
-                type="date"
-                disabled={!pickedFrom}
-                value={pickedTo ?? ''}
-                onChange={(e) => setPickedTo(e.target.value || null)}
-                style={{ position: 'absolute', inset: 0, opacity: 0, cursor: pickedFrom ? 'pointer' : 'default' }}
-              />
-            </label>
-            {pickedFrom && (
-              <button onClick={clearPickedRange} style={{ flex: '0 0 auto' }}>✕ Clear dates</button>
-            )}
+            </button>
+            {pickedFrom && <button onClick={clearPickedRange}>✕ Clear dates</button>}
           </div>
+
+          <DateCalendarPicker
+            open={fromCalendarOpen}
+            onClose={() => setFromCalendarOpen(false)}
+            value={pickedFrom}
+            onSelect={setPickedFrom}
+            salesDates={salesDates}
+            title="From"
+          />
+          <DateCalendarPicker
+            open={toCalendarOpen}
+            onClose={() => setToCalendarOpen(false)}
+            value={pickedTo}
+            onSelect={setPickedTo}
+            salesDates={salesDates}
+            title="To"
+          />
 
           <div className="chips" style={{ paddingTop: 4 }}>
             <button className={filterTab === 'all' ? 'on' : ''} onClick={() => setFilterTab('all')}>Everything</button>
@@ -361,11 +353,15 @@ export default function Book() {
                 const label = customerLabelOf(order)
                 const anyPendingPickup = order.lines.some((l) => l.tbs && !l.pickedUp)
                 const anyPickedUp = order.lines.some((l) => l.tbs && l.pickedUp)
+                // A balance payoff is its own kind of entry -- cash
+                // collected against an old balance, not goods sold today
+                // -- distinctly colored so it never reads as a fresh sale.
+                const isPayoff = order.lines.some((l) => l.isPayoff)
                 return (
                   <div
                     key={order.orderNumber}
                     className="entry"
-                    style={{ cursor: 'pointer' }}
+                    style={{ cursor: 'pointer', background: isPayoff ? '#eef4ff' : undefined, borderColor: isPayoff ? '#bcd2ff' : undefined }}
                     onClick={() => setInvoiceOrderNumber(order.orderNumber)}
                   >
                     {/* Items on the left, total vertically centered on the
@@ -404,8 +400,9 @@ export default function Book() {
                       </span>
                     </div>
 
-                    {(anyPendingPickup || anyPickedUp || order.owing > 0.005) && (
+                    {(isPayoff || anyPendingPickup || anyPickedUp || order.owing > 0.005) && (
                       <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6 }}>
+                        {isPayoff && <span className="pill" style={{ background: '#3f5fce', color: 'white' }}>balance payment</span>}
                         {anyPendingPickup && <span className="pill amber">tbs</span>}
                         {anyPickedUp && !anyPendingPickup && <span className="pill grey">picked up</span>}
                         {order.owing > 0.005 && (

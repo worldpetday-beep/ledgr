@@ -4,6 +4,7 @@ import { db, DRAWER_OUT_KINDS, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type Dr
 import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
 import { owingUsd, paidLrdAmountOf, paidUsdAmountOf, saleValueUsd, withoutVoided } from '../lib/salesLedger'
 import { loadActiveDate, storeActiveDate } from '../lib/activeDate'
+import { DateCalendarPicker } from '../components/DateCalendarPicker'
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
@@ -31,63 +32,136 @@ function AttachmentThumb({ file }: { file: Blob & { name?: string } }) {
   )
 }
 
-// One record per calendar day, edited in place (every field autosaves) --
-// exactly the reference's `cash[date]` model. Sold vs cash-in up top (with
-// a note explaining the gap when balances are owed), opening balance
-// carried from the previous day's count but overridable, itemized money
-// out with a per-kind subtotal, counted vs expected vs difference, and a
-// close/reopen toggle.
+function outsByCurrency(outs: DrawerOut[], cur: Currency): number {
+  return outs.filter((o) => o.cur === cur).reduce((s, o) => s + o.amt, 0)
+}
+
+// A withdrawal/paid-out row shared by both the till's "money that went
+// out" list and the safe's "taken out" list -- only the currency total
+// each contributes to differs by which array it's saved into.
+function OutRow({ out, onUpdate, onRemove }: { out: DrawerOut; onUpdate: (patch: Partial<DrawerOut>) => void; onRemove: () => void }) {
+  return (
+    <div className="card" style={{ padding: '11px 12px' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+        <input
+          className="in"
+          style={{ flex: 1, padding: '9px 11px', fontSize: 14 }}
+          placeholder="Who / what for"
+          value={out.name}
+          onChange={(e) => onUpdate({ name: e.target.value })}
+        />
+        <button className="rm" style={{ fontSize: 16 }} onClick={onRemove} aria-label="Remove">✕</button>
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <select className="in" style={{ flex: 1.2, padding: '9px 10px', fontSize: 13 }} value={out.kind} onChange={(e) => onUpdate({ kind: e.target.value })}>
+          {DRAWER_OUT_KINDS.map((k) => <option key={k}>{k}</option>)}
+        </select>
+        <select className="in" style={{ width: 80, padding: '9px 8px', fontSize: 13 }} value={out.cur} onChange={(e) => onUpdate({ cur: e.target.value as Currency })}>
+          <option>USD</option>
+          <option>LRD</option>
+        </select>
+        <input
+          className="in m"
+          style={{ width: 90, padding: '9px 10px', fontSize: 15 }}
+          inputMode="decimal"
+          placeholder="0"
+          value={out.amt || ''}
+          onChange={(e) => onUpdate({ amt: Number(e.target.value) || 0 })}
+        />
+      </div>
+    </div>
+  )
+}
+
+type QuickRange = 'today' | 'week' | 'month'
+
+// Two drawers, matching how the shop actually runs:
+//
+// Drawer 1, the till -- starts EMPTY every morning (no opening float, that
+// concept doesn't apply here). Every dollar collected today goes in;
+// what's paid out of it same-day is itemized below; counting it at close
+// and tapping "Sweep to safe" moves the counted total into Drawer 2 and
+// resets the till to zero for tomorrow -- sweeps what was actually
+// counted, not what was expected, so a shortfall stays visible on that
+// day's own record instead of quietly vanishing into the safe's number.
+//
+// Drawer 2, the safe -- carries a running balance across days. Its
+// opening balance for any given day is computed by walking every prior
+// day's sweep-in/withdrawal activity (or an explicit override on some
+// earlier day, which resets the running base from there forward) --
+// nothing needs to be cached or kept in sync by hand. Money can be taken
+// out of it at any point, for any purpose, logged on whatever day it
+// actually happened.
 export default function Drawer() {
   const [d, setDState] = useState(() => loadActiveDate() ?? dateKeyMonrovia(Date.now()))
   function setD(key: string) {
     setDState(key)
     storeActiveDate(key)
   }
-  const [pickerOpen, setPickerOpen] = useState(false)
+  const [calendarOpen, setCalendarOpen] = useState(false)
   const todayKey = dateKeyMonrovia(Date.now())
 
   const records = useLiveQuery(() => db.drawerCounts.orderBy('timestamp').toArray(), []) ?? []
   const rec = useMemo(() => records.find((r) => dateKeyMonrovia(r.timestamp) === d) ?? null, [records, d])
-  const prevRec = useMemo(
-    () => records.filter((r) => dateKeyMonrovia(r.timestamp) < d).sort((a, b) => b.timestamp - a.timestamp)[0] ?? null,
-    [records, d],
-  )
 
   const salesRaw = useLiveQuery(() => db.sales.orderBy('timestamp').toArray(), []) ?? []
-  const daySales = useMemo(
-    () => withoutVoided(salesRaw).filter((s) => dateKeyMonrovia(s.timestamp) === d),
-    [salesRaw, d],
-  )
+  const allSales = useMemo(() => withoutVoided(salesRaw), [salesRaw])
+  const daySales = useMemo(() => allSales.filter((s) => dateKeyMonrovia(s.timestamp) === d), [allSales, d])
+  const salesDates = useMemo(() => new Set(allSales.map((s) => dateKeyMonrovia(s.timestamp))), [allSales])
   const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
   const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
 
-  // Blended into USD per-line (saleValueUsd converts the LRD portion at
-  // the rate that was actually in effect) -- this used to be a raw
-  // soldFor + secondaryAmount sum tagged 'USD' regardless of what
-  // currency the sale was actually in, so a handful of LRD sales could
-  // read as thousands of "dollars" that were never really there.
-  const sold = daySales.reduce((s, l) => s + saleValueUsd(l, rate), 0)
-  // "Cash came in" is what actually landed in the drawer, not what was
-  // agreed -- a sale left with a balance owing shouldn't inflate this
-  // figure just because the goods went out. paidUsdAmountOf/
-  // paidLrdAmountOf read paidAmount (falling back to the old "no tracking
-  // yet = fully paid" assumption for sales from before that field
-  // existed), not soldFor.
+  // "Goods sold" vs "cash collected" are deliberately different numbers --
+  // cash collected can be HIGHER than goods sold whenever an old balance
+  // gets paid off today (real money in, but no new goods went out), and
+  // LOWER whenever today's sales are left with a balance owing. A payoff
+  // line (collectPayment's own dated entry) is exactly that "old balance"
+  // case -- real cash in, but the goods themselves were already counted
+  // sold the day they actually left, so it's excluded from goods sold.
+  const goodsSold = daySales.filter((l) => !l.isPayoff).reduce((s, l) => s + saleValueUsd(l, rate), 0)
   const inU = daySales.reduce((s, l) => s + paidUsdAmountOf(l), 0)
   const inL = daySales.reduce((s, l) => s + paidLrdAmountOf(l), 0)
-  const soldButNotCash = daySales.reduce((s, l) => s + owingUsd(l, rate), 0)
+  const stillOwed = daySales.reduce((s, l) => s + owingUsd(l, rate), 0)
 
-  const outs = rec?.outs ?? []
-  const outU = outs.filter((o) => o.cur === 'USD').reduce((s, o) => s + o.amt, 0)
-  const outL = outs.filter((o) => o.cur === 'LRD').reduce((s, o) => s + o.amt, 0)
+  // Drawer 1 -- the till. No opening float: it starts at zero every day,
+  // full stop.
+  const tillOuts = rec?.outs ?? []
+  const tillOutU = outsByCurrency(tillOuts, 'USD')
+  const tillOutL = outsByCurrency(tillOuts, 'LRD')
+  const tillShouldU = inU - tillOutU
+  const tillShouldL = inL - tillOutL
+  const tillGotU = rec ? rec.usdActual : null
+  const tillGotL = rec ? rec.lrdActual : null
+  const tillDiffU = tillGotU === null ? null : tillGotU - tillShouldU
+  const tillDiffL = tillGotL === null ? null : (tillGotL ?? 0) - tillShouldL
 
-  const openU = rec?.openUsdOverride ?? prevRec?.usdActual ?? 0
-  const openL = rec?.openLrdOverride ?? prevRec?.lrdActual ?? 0
-  const expU = openU + inU - outU
-  const expL = openL + inL - outL
-  const gotU = rec ? rec.usdActual : null
-  const gotL = rec ? rec.lrdActual : null
-  const diff = gotU === null ? null : (gotU - expU) + ((gotL ?? 0) - expL) / rate
+  // Drawer 2 -- the safe. Walk every day strictly before `d`, applying any
+  // override (resets the running base) then that day's sweep-in and
+  // withdrawals, to get the balance the safe opened with on day `d`.
+  const safeOpenOf = useMemo(() => {
+    const sorted = [...records].sort((a, b) => a.timestamp - b.timestamp)
+    let usd = 0
+    let lrd = 0
+    for (const r of sorted) {
+      if (dateKeyMonrovia(r.timestamp) >= d) break
+      if (r.safeOpenUsdOverride != null) usd = r.safeOpenUsdOverride
+      if (r.safeOpenLrdOverride != null) lrd = r.safeOpenLrdOverride
+      usd += r.sweptUsd ?? 0
+      lrd += r.sweptLrd ?? 0
+      usd -= outsByCurrency(r.safeOuts ?? [], 'USD')
+      lrd -= outsByCurrency(r.safeOuts ?? [], 'LRD')
+    }
+    return { usd, lrd }
+  }, [records, d])
+  const safeOpenU = rec?.safeOpenUsdOverride ?? safeOpenOf.usd
+  const safeOpenL = rec?.safeOpenLrdOverride ?? safeOpenOf.lrd
+  const sweptU = rec?.sweptUsd ?? 0
+  const sweptL = rec?.sweptLrd ?? 0
+  const safeOuts = rec?.safeOuts ?? []
+  const safeOutU = outsByCurrency(safeOuts, 'USD')
+  const safeOutL = outsByCurrency(safeOuts, 'LRD')
+  const safeNowU = safeOpenU + sweptU - safeOutU
+  const safeNowL = safeOpenL + sweptL - safeOutL
 
   async function upsert(patch: Partial<Omit<import('../db').DrawerCount, 'id'>>) {
     if (rec?.id) {
@@ -103,14 +177,48 @@ export default function Drawer() {
     }
   }
 
-  function addOut() {
-    upsert({ outs: [...outs, { id: uid(), name: '', amt: 0, cur: 'USD', kind: DRAWER_OUT_KINDS[0] }] })
+  function addTillOut() {
+    upsert({ outs: [...tillOuts, { id: uid(), name: '', amt: 0, cur: 'USD', kind: DRAWER_OUT_KINDS[0] }] })
   }
-  function updateOut(id: string, patch: Partial<DrawerOut>) {
-    upsert({ outs: outs.map((o) => (o.id === id ? { ...o, ...patch } : o)) })
+  function updateTillOut(id: string, patch: Partial<DrawerOut>) {
+    upsert({ outs: tillOuts.map((o) => (o.id === id ? { ...o, ...patch } : o)) })
   }
-  function removeOut(id: string) {
-    upsert({ outs: outs.filter((o) => o.id !== id) })
+  function removeTillOut(id: string) {
+    upsert({ outs: tillOuts.filter((o) => o.id !== id) })
+  }
+
+  function addSafeOut() {
+    upsert({ safeOuts: [...safeOuts, { id: uid(), name: '', amt: 0, cur: 'USD', kind: DRAWER_OUT_KINDS[0] }] })
+  }
+  function updateSafeOut(id: string, patch: Partial<DrawerOut>) {
+    upsert({ safeOuts: safeOuts.map((o) => (o.id === id ? { ...o, ...patch } : o)) })
+  }
+  function removeSafeOut(id: string) {
+    upsert({ safeOuts: safeOuts.filter((o) => o.id !== id) })
+  }
+
+  // Sweeps what was actually COUNTED (not the expected/"should be"
+  // figure) into the safe, and closes the day -- tomorrow's till starts
+  // at zero regardless of what happened today.
+  async function sweepToSafe() {
+    await upsert({ sweptUsd: tillGotU ?? 0, sweptLrd: tillGotL ?? 0, closed: true })
+  }
+  async function reopenDay() {
+    await upsert({ sweptUsd: 0, sweptLrd: 0, closed: false })
+  }
+
+  function goQuickRange(range: QuickRange) {
+    const today = new Date()
+    if (range === 'today') { setD(todayKey); return }
+    if (range === 'week') {
+      const day = today.getDay()
+      const monday = new Date(today)
+      monday.setDate(today.getDate() - ((day + 6) % 7))
+      setD(dateKeyMonrovia(monday.getTime()))
+      return
+    }
+    const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
+    setD(dateKeyMonrovia(firstOfMonth.getTime()))
   }
 
   return (
@@ -120,174 +228,109 @@ export default function Drawer() {
           <h1>Drawer</h1>
           <div className="sub">{d === todayKey ? 'Today' : formatShortDateMonrovia(new Date(`${d}T12:00:00`).getTime())}</div>
         </div>
-        <button className="btn-s" onClick={() => setPickerOpen(true)}>{d}</button>
+        <button className="btn-s" onClick={() => setCalendarOpen(true)}>📅 {d}</button>
       </div>
 
       <div className="body">
         <div className="pad">
+          {/* Today/This week/This month jump to that period's first day --
+              Drawer is inherently a one-day-at-a-time view, so "this week"
+              means "go to Monday", not a multi-day range like Book/Numbers
+              use these same three shortcuts for. */}
+          <div className="chips" style={{ paddingTop: 0, marginBottom: 4 }}>
+            <button className={d === todayKey ? 'on' : ''} onClick={() => goQuickRange('today')}>Today</button>
+            <button onClick={() => goQuickRange('week')}>This week</button>
+            <button onClick={() => goQuickRange('month')}>This month</button>
+          </div>
+
           <div className="g2" style={{ marginTop: 4 }}>
             <div className="kpi">
-              <span className="k">Sold today</span>
-              <span className="v m">{money(sold, 'USD')}</span>
-              <span className="s">{daySales.length} sale{daySales.length === 1 ? '' : 's'} — value of goods sold, even if not yet paid</span>
+              <span className="k">Goods sold today</span>
+              <span className="v m">{money(goodsSold, 'USD')}</span>
+              <span className="s">{daySales.filter((l) => !l.isPayoff).length} sale{daySales.filter((l) => !l.isPayoff).length === 1 ? '' : 's'} — value of everything sold, paid or not</span>
             </div>
             <div className="kpi a">
-              <span className="k">Cash came in</span>
+              <span className="k">Cash collected today</span>
               <span className="v m">{money(inU + inL / rate, 'USD')}</span>
-              <span className="s m">{money(inU, 'USD')} + {money(inL, 'LRD')} — actually collected today</span>
+              <span className="s m">{money(inU, 'USD')} + {money(inL, 'LRD')} — physically came in, incl. old balances paid off</span>
             </div>
           </div>
 
-          {soldButNotCash > 0.005 && (
+          {stillOwed > 0.005 && (
             <div className="warn" style={{ marginBottom: 12 }}>
               <span>⚠</span>
-              <span>{money(soldButNotCash, 'USD')} of today's sales is still owed — that's the gap between sold and cash.</span>
+              <span>{money(stillOwed, 'USD')} of today's sales is still owed — that's the gap between goods sold and cash collected.</span>
             </div>
           )}
 
-          <p className="eb">Money that went out</p>
-          {outs.map((o) => (
-            <div className="card" key={o.id} style={{ padding: '11px 12px' }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                <input
-                  className="in"
-                  style={{ flex: 1, padding: '9px 11px', fontSize: 14 }}
-                  placeholder="Who / what for"
-                  value={o.name}
-                  onChange={(e) => updateOut(o.id, { name: e.target.value })}
-                />
-                <button className="rm" style={{ fontSize: 16 }} onClick={() => removeOut(o.id)} aria-label="Remove">✕</button>
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <select
-                  className="in"
-                  style={{ flex: 1.2, padding: '9px 10px', fontSize: 13 }}
-                  value={o.kind}
-                  onChange={(e) => updateOut(o.id, { kind: e.target.value })}
-                >
-                  {DRAWER_OUT_KINDS.map((k) => <option key={k}>{k}</option>)}
-                </select>
-                <select
-                  className="in"
-                  style={{ width: 80, padding: '9px 8px', fontSize: 13 }}
-                  value={o.cur}
-                  onChange={(e) => updateOut(o.id, { cur: e.target.value as Currency })}
-                >
-                  <option>USD</option>
-                  <option>LRD</option>
-                </select>
-                <input
-                  className="in m"
-                  style={{ width: 90, padding: '9px 10px', fontSize: 15 }}
-                  inputMode="decimal"
-                  placeholder="0"
-                  value={o.amt || ''}
-                  onChange={(e) => updateOut(o.id, { amt: Number(e.target.value) || 0 })}
-                />
-              </div>
-            </div>
+          <p className="eb">Drawer 1 — the till<span className="n"> — starts empty every morning</span></p>
+          <div className="card">
+            <div className="st"><span className="k">Cash collected today</span><span className="v m">{money(inU, 'USD')} + {money(inL, 'LRD')}</span></div>
+            <div className="st"><span className="k">− Paid out from the till</span><span className="v m" style={{ color: 'var(--cl-alarm)' }}>{money(tillOutU, 'USD')} + {money(tillOutL, 'LRD')}</span></div>
+            <div className="st"><span className="k">= Should be in the till</span><span className="v m">{money(tillShouldU, 'USD')} + {money(tillShouldL, 'LRD')}</span></div>
+          </div>
+
+          <p className="eb">Money paid out of the till today</p>
+          {tillOuts.map((o) => (
+            <OutRow key={o.id} out={o} onUpdate={(patch) => updateTillOut(o.id, patch)} onRemove={() => removeTillOut(o.id)} />
           ))}
-          <button className="btn ghost" onClick={addOut}>+ Add money out</button>
+          <button className="btn ghost" onClick={addTillOut}>+ Add money out</button>
 
-          {(outU > 0 || outL > 0) && (
-            <div className="card" style={{ marginTop: 10 }}>
-              <div className="st">
-                <span className="k">Total out</span>
-                <span className="v m" style={{ color: 'var(--cl-alarm)' }}>−{money(outU + outL / rate, 'USD')}</span>
-              </div>
-              {DRAWER_OUT_KINDS.filter((k) => outs.some((o) => o.kind === k)).map((k) => (
-                <div className="st" key={k}>
-                  <span className="k">{k}</span>
-                  <span className="v m">
-                    {money(outs.filter((o) => o.kind === k).reduce((s, o) => s + o.amt / (o.cur === 'LRD' ? rate : 1), 0), 'USD')}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <p className="eb">Count the drawer</p>
+          <p className="eb" style={{ marginTop: 14 }}>Count the till</p>
           <div className="card">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
               <div>
                 <label className="lab">USD counted</label>
-                <input
-                  className="in m"
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  value={rec?.usdActual || ''}
-                  onChange={(e) => upsert({ usdActual: Number(e.target.value) || 0 })}
-                />
+                <input className="in m" inputMode="decimal" placeholder="0.00" value={rec?.usdActual || ''} onChange={(e) => upsert({ usdActual: Number(e.target.value) || 0 })} />
               </div>
               <div>
                 <label className="lab">LRD counted</label>
-                <input
-                  className="in m"
-                  inputMode="decimal"
-                  placeholder="0"
-                  value={rec?.lrdActual || ''}
-                  onChange={(e) => upsert({ lrdActual: Number(e.target.value) || 0 })}
-                />
+                <input className="in m" inputMode="decimal" placeholder="0" value={rec?.lrdActual || ''} onChange={(e) => upsert({ lrdActual: Number(e.target.value) || 0 })} />
               </div>
             </div>
             <div style={{ marginTop: 12 }}>
-              <div className="st">
-                <span className="k">Should be there</span>
-                <span className="v m">{money(expU, 'USD')} + {money(expL, 'LRD')}</span>
-              </div>
-              <div className="st">
-                <span className="k">Actually there</span>
-                <span className="v m">{gotU === null ? '—' : `${money(gotU, 'USD')} + ${money(gotL ?? 0, 'LRD')}`}</span>
-              </div>
-              <div className="st">
-                <span className="k">Difference</span>
-                <span className="v m" style={{ color: diff === null ? 'var(--cl-ink-3)' : Math.abs(diff) < 0.01 ? 'var(--cl-usd)' : 'var(--cl-alarm)' }}>
-                  {diff === null ? 'count first' : `${diff > 0 ? '+' : ''}${money(diff, 'USD')}`}
-                </span>
-              </div>
+              <div className="st"><span className="k">Difference (USD)</span><span className="v m" style={{ color: tillDiffU === null ? 'var(--cl-ink-3)' : Math.abs(tillDiffU) < 0.01 ? 'var(--cl-usd)' : 'var(--cl-alarm)' }}>{tillDiffU === null ? 'count first' : `${tillDiffU > 0 ? '+' : ''}${money(tillDiffU, 'USD')}`}</span></div>
+              <div className="st"><span className="k">Difference (LRD)</span><span className="v m" style={{ color: tillDiffL === null ? 'var(--cl-ink-3)' : Math.abs(tillDiffL) < 1 ? 'var(--cl-usd)' : 'var(--cl-alarm)' }}>{tillDiffL === null ? 'count first' : `${tillDiffL > 0 ? '+' : ''}${money(tillDiffL, 'LRD')}`}</span></div>
             </div>
           </div>
 
-          {/* Opening float, not a revenue total -- this is just what was
-              physically sitting in the drawer this morning (defaults to
-              last night's own counted total below, editable if it started
-              different). It's what "Should be there" above already adds
-              today's cash-in and subtracts money-out on top of -- it plays
-              no other part in the day's math. Shown after the actual count
-              since that's usually filled in first and this is more of a
-              reference/audit figure than something acted on daily. */}
-          <p className="eb">Carried from yesterday<span className="n"> — the opening float, not a revenue total</span></p>
+          <button className={`btn ${rec?.closed ? 'ghost' : 'amber'}`} onClick={rec?.closed ? reopenDay : sweepToSafe} disabled={tillGotU === null}>
+            {rec?.closed ? 'Reopen this day' : 'Sweep counted total to the safe'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', marginTop: 9, lineHeight: 1.55 }}>
+            {rec?.closed
+              ? `Swept ${money(sweptU, 'USD')} + ${money(sweptL, 'LRD')} to the safe. Reopening clears the sweep and lets you recount.`
+              : 'Sweeps what was actually counted above (not "should be there") -- a shortfall stays visible on this day\'s record either way.'}
+          </p>
+
+          <p className="eb" style={{ marginTop: 18 }}>Drawer 2 — the safe<span className="n"> — carries over day to day</span></p>
           <div className="card">
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9, marginBottom: 10 }}>
               <div>
-                <label className="lab">USD</label>
-                <input
-                  className="in m"
-                  inputMode="decimal"
-                  value={rec?.openUsdOverride ?? ''}
-                  placeholder={String(openU)}
-                  onChange={(e) => upsert({ openUsdOverride: e.target.value === '' ? undefined : Number(e.target.value) || 0 })}
-                />
+                <label className="lab">Opening USD</label>
+                <input className="in m" inputMode="decimal" value={rec?.safeOpenUsdOverride ?? ''} placeholder={String(safeOpenOf.usd)} onChange={(e) => upsert({ safeOpenUsdOverride: e.target.value === '' ? undefined : Number(e.target.value) || 0 })} />
               </div>
               <div>
-                <label className="lab">LRD</label>
-                <input
-                  className="in m"
-                  inputMode="decimal"
-                  value={rec?.openLrdOverride ?? ''}
-                  placeholder={String(openL)}
-                  onChange={(e) => upsert({ openLrdOverride: e.target.value === '' ? undefined : Number(e.target.value) || 0 })}
-                />
+                <label className="lab">Opening LRD</label>
+                <input className="in m" inputMode="decimal" value={rec?.safeOpenLrdOverride ?? ''} placeholder={String(safeOpenOf.lrd)} onChange={(e) => upsert({ safeOpenLrdOverride: e.target.value === '' ? undefined : Number(e.target.value) || 0 })} />
               </div>
             </div>
-            <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', margin: '9px 0 0', lineHeight: 1.5 }}>
-              {prevRec
-                ? "Auto-filled from what you counted at the end of the last day recorded — not today's or yesterday's revenue. Type over it only if the drawer actually started with a different amount."
-                : 'Type what was physically in the drawer this morning.'}
-            </p>
+            <div className="st"><span className="k">Balance in the safe</span><span className="v m">{money(safeOpenU, 'USD')} + {money(safeOpenL, 'LRD')}</span></div>
+            <div className="st"><span className="k">+ Swept in today</span><span className="v m" style={{ color: 'var(--cl-usd)' }}>{money(sweptU, 'USD')} + {money(sweptL, 'LRD')}</span></div>
+            <div className="st"><span className="k">− Taken out</span><span className="v m" style={{ color: 'var(--cl-alarm)' }}>{money(safeOutU, 'USD')} + {money(safeOutL, 'LRD')}</span></div>
+            <div className="st"><span className="k">= Balance now</span><span className="v m">{money(safeNowU, 'USD')} + {money(safeNowL, 'LRD')}</span></div>
           </div>
 
-          <p className="eb">Attach a photo<span className="n"> — when there's only time for the total, not every line</span></p>
+          <p className="eb">Taken out of the safe today</p>
+          {safeOuts.map((o) => (
+            <OutRow key={o.id} out={o} onUpdate={(patch) => updateSafeOut(o.id, patch)} onRemove={() => removeSafeOut(o.id)} />
+          ))}
+          <button className="btn ghost" onClick={addSafeOut}>+ Add money taken out</button>
+          <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', marginTop: 9, lineHeight: 1.5 }}>
+            Only withdrawals marked "Expense" count against profit on Numbers — Sent to brother, Taken home and Lend are movements of your own money, not costs.
+          </p>
+
+          <p className="eb" style={{ marginTop: 18 }}>Attach a photo<span className="n"> — when there's only time for the total, not every line</span></p>
           <div className="card">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {(rec?.attachments ?? []).map((file, i) => (
@@ -321,48 +364,10 @@ export default function Drawer() {
               Photos or PDFs, any number -- kept as backup for this day, separate from the numbers above.
             </p>
           </div>
-
-          <button
-            className={`btn ${rec?.closed ? 'ghost' : 'amber'}`}
-            onClick={() => upsert({ closed: !rec?.closed })}
-          >
-            {rec?.closed ? 'Reopen this day' : 'Close the day'}
-          </button>
-          <p style={{ fontSize: 11, color: 'var(--cl-ink-3)', marginTop: 9, lineHeight: 1.55 }}>
-            Tonight's count becomes tomorrow's opening drawer.
-          </p>
         </div>
       </div>
 
-      {pickerOpen && (
-        <div className="sheet" onClick={() => setPickerOpen(false)}>
-          <div className="sbox" onClick={(e) => e.stopPropagation()}>
-            <div className="grab" />
-            <div className="scroll" style={{ paddingBottom: 16 }}>
-              <p className="eb">Which day?</p>
-              {Array.from({ length: 14 }, (_, i) => dateKeyMonrovia(Date.now() - i * 86400000)).map((key) => (
-                <button
-                  key={key}
-                  className="btn ghost"
-                  style={{
-                    marginBottom: 8,
-                    textAlign: 'left',
-                    letterSpacing: 0,
-                    textTransform: 'none',
-                    fontSize: 14,
-                    borderColor: key === d ? 'var(--cl-amber)' : 'var(--cl-line)',
-                    background: key === d ? '#fffbf0' : 'transparent',
-                  }}
-                  onClick={() => { setD(key); setPickerOpen(false) }}
-                >
-                  {key === todayKey ? 'Today' : formatShortDateMonrovia(new Date(`${key}T12:00:00`).getTime())}
-                  <span className="m" style={{ color: 'var(--cl-ink-3)', fontWeight: 500, marginLeft: 8 }}>{key}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      <DateCalendarPicker open={calendarOpen} onClose={() => setCalendarOpen(false)} value={d} onSelect={setD} salesDates={salesDates} title="Which day?" />
     </div>
   )
 }

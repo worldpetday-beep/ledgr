@@ -1,4 +1,13 @@
-import { db, releaseOrderNumberIfLatest, type Currency, type FulfillmentLocation, type Product, type Sale, type Variant } from '../db'
+import {
+  db,
+  releaseOrderNumberIfLatest,
+  reserveNextOrderNumber,
+  type Currency,
+  type FulfillmentLocation,
+  type Product,
+  type Sale,
+  type Variant,
+} from '../db'
 
 // A single sale line can carry a primary currency+amount and, for a
 // split-currency payment, a secondary currency+amount. These pull out
@@ -72,10 +81,21 @@ export function paidLrdAmountOf(sale: Sale): number {
 // balance, oldest line first, capping each line's paidAmount at its own
 // soldFor -- soldFor itself is never touched, so this never re-totals a
 // sale, it only records that more of it has now actually been collected.
-export async function collectPayment(lines: Sale[], amount: number): Promise<void> {
+//
+// Also writes a brand-new, separately-dated "payoff" line for the payment
+// itself (today, not whatever day the original goods went out), fully
+// paid, no product attached. It's what actually shows up as its own card
+// in Book, distinctly colored -- and it counts as cash collected but
+// never as goods sold, since the goods were already counted sold on the
+// day they left.
+export async function collectPayment(
+  order: { lines: Sale[]; currency: Currency; customerNumber: number },
+  amount: number,
+  currentRate: number,
+): Promise<void> {
   let remaining = amount
-  await db.transaction('rw', db.sales, async () => {
-    for (const l of lines) {
+  await db.transaction('rw', db.sales, db.settings, async () => {
+    for (const l of order.lines) {
       if (remaining <= 0) break
       const owed = owingOf(l)
       if (owed <= 0) continue
@@ -83,6 +103,24 @@ export async function collectPayment(lines: Sale[], amount: number): Promise<voi
       remaining -= applied
       await db.sales.update(l.id!, { paidAmount: (l.paidAmount ?? l.soldFor) + applied })
     }
+
+    const orderNumber = await reserveNextOrderNumber()
+    await db.sales.add({
+      itemName: 'Balance payment',
+      qty: 1,
+      soldFor: amount,
+      paidAmount: amount,
+      costAtSale: 0,
+      currency: order.currency,
+      rateAtSale: currentRate,
+      timestamp: Date.now(),
+      customerNumber: order.customerNumber,
+      orderNumber,
+      location: 'myShop',
+      tbs: false,
+      pickedUp: true,
+      isPayoff: true,
+    })
   })
 }
 
