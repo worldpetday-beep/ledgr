@@ -280,7 +280,7 @@ export default function Sell() {
                   currency={c.unit.currency}
                   unit={c.unit.unit}
                   qty={Math.floor((c.variant.stockMyShop + c.variant.stockVishalShop) / c.unit.factor)}
-                  rate={rate}
+                  showUnit={(c.variant.sellUnits?.length ?? 0) > 0}
                   onEditCost={(next) => db.variants.update(c.variant.id!, { costPrice: next / c.unit.factor, costUnknown: false, updatedAt: Date.now() })}
                   onClick={() => add(c)}
                 />
@@ -313,9 +313,11 @@ export default function Sell() {
                   <span className="m" style={{ fontSize: 12, fontWeight: 700, color: 'var(--cl-ink)' }}>
                     {money(c.unit.price, c.unit.currency)}
                   </span>
-                  <span className="m" style={{ fontSize: 10, color: 'var(--cl-ink-3)' }}>
-                    per {c.unit.unit}
-                  </span>
+                  {(c.variant.sellUnits?.length ?? 0) > 0 && (
+                    <span className="m" style={{ fontSize: 10, color: 'var(--cl-ink-3)' }}>
+                      per {c.unit.unit}
+                    </span>
+                  )}
                 </button>
               ))}
               <button

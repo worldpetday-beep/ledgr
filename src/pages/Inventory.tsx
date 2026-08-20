@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, DEFAULT_CATEGORIES, UNIT_TYPES, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type Product, type Variant, type TransferDirection } from '../db'
+import { db, DEFAULT_CATEGORIES, UNIT_TYPES, type Product, type Variant, type TransferDirection } from '../db'
 import { Button, Modal, Field, inputClass, Pill, BottomSheet } from '../components/ui'
 import {
   PlusIcon,
@@ -74,8 +74,6 @@ export default function Inventory() {
   const products = useLiveQuery(() => db.products.toArray(), [])
   const allVariants = useLiveQuery(() => db.variants.toArray(), [])
   const categories = useLiveQuery(() => db.categories.toArray(), [])
-  const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
-  const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
 
   const [query, setQuery] = useState('')
   const [activeChip, setActiveChip] = useState<Chip>('all')
@@ -645,7 +643,7 @@ export default function Inventory() {
                     currency={row.variant.currency}
                     unit={guessUnit(`${row.productName} ${row.variant.label}`, category)}
                     qty={row.variant.stockMyShop + row.variant.stockVishalShop}
-                    rate={rate}
+                    showUnit={(row.variant.sellUnits?.length ?? 0) > 0}
                     highlightSell
                     onEditCost={(next) => db.variants.update(row.variant.id!, { costPrice: next, costUnknown: false, updatedAt: Date.now() })}
                     onClick={() => setDetailProductId(row.productId)}
@@ -687,7 +685,7 @@ export default function Inventory() {
                             currency={row.variant.currency}
                             unit={guessUnit(`${row.productName} ${row.variant.label}`, category)}
                             qty={row.variant.stockMyShop + row.variant.stockVishalShop}
-                            rate={rate}
+                            showUnit={(row.variant.sellUnits?.length ?? 0) > 0}
                             highlightSell
                             onEditCost={(next) => db.variants.update(row.variant.id!, { costPrice: next, costUnknown: false, updatedAt: Date.now() })}
                             onClick={() => setDetailProductId(row.productId)}

@@ -56,15 +56,21 @@ function EditableCost({ cost, onCommit }: { cost: number; onCommit: (next: numbe
 }
 
 // One product/variant as its own standalone card -- title + price on the
-// top line, "cost $X.XX -> +$Y.YY per <unit>" (the markup) on the left of
-// the second line, stock on the right. Used by both Sell (search results)
-// and Stock (the catalog list) so a SKU reads identically everywhere.
-// In Sell the top-right price stays plain ink (not the --cl-usd green used
-// for actual money-in-hand figures elsewhere) since it's a catalog price,
-// not cash that's already in the till -- but in Stock, `highlightSell`
-// turns it green, matching that tab's own convention of highlighting the
-// selling price as the number that matters at a glance while cost sits
-// quietly below it.
+// top line, cost + quantity on the second. Used by both Sell (search
+// results) and Stock (the catalog list) so a SKU reads identically
+// everywhere. In Sell the top-right price stays plain ink (not the
+// --cl-usd green used for actual money-in-hand figures elsewhere) since
+// it's a catalog price, not cash that's already in the till -- but in
+// Stock, `highlightSell` turns it green, matching that tab's own
+// convention of highlighting the selling price as the number that matters
+// at a glance while cost sits quietly below it.
+//
+// The unit word (per Piece/Sheet/Bundle) only shows up when `showUnit` is
+// true, i.e. this product is actually sold more than one way -- naming
+// the unit on a TV that only ever sells "by the piece" adds nothing, it's
+// just noise. The markup/margin comparison used to live here too but has
+// moved into the product editor entirely -- a browse row is for picking
+// an item, not comparing profit between two of its own units.
 export function CatalogEntryCard({
   title,
   cost,
@@ -72,7 +78,7 @@ export function CatalogEntryCard({
   currency,
   unit,
   qty,
-  rate,
+  showUnit = true,
   highlightSell = false,
   onEditCost,
   onClick,
@@ -87,9 +93,7 @@ export function CatalogEntryCard({
   currency: Currency
   unit: string
   qty: number
-  // LRD-per-USD, needed to convert the USD cost into the sell currency so
-  // the markup delta below is an apples-to-apples subtraction.
-  rate: number
+  showUnit?: boolean
   highlightSell?: boolean
   // When provided, the cost figure becomes tap-to-edit instead of plain
   // text -- omit to leave it read-only (e.g. a context where there's no
@@ -97,8 +101,6 @@ export function CatalogEntryCard({
   onEditCost?: (next: number) => void
   onClick?: () => void
 }) {
-  const costInSellCurrency = currency === 'USD' ? cost : cost * rate
-  const markup = sell - costInSellCurrency
   return (
     <div className="entry" style={{ width: '100%', display: 'block' }}>
       <button
@@ -115,16 +117,13 @@ export function CatalogEntryCard({
         </div>
       </button>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 5, gap: 8 }}>
-        <span style={{ display: 'flex', alignItems: 'baseline', gap: 4, minWidth: 0 }}>
-          {onEditCost ? <EditableCost cost={cost} onCommit={onEditCost} /> : (
-            <span className="m" style={{ fontSize: 11, color: 'var(--cl-ink-3)' }}>cost {money(cost, 'USD')}</span>
-          )}
-          {markup > 0 && (
-            <span className="m" style={{ fontSize: 11, color: 'var(--cl-ink-3)' }}>→ +{money(markup, currency)} per {unit}</span>
-          )}
-        </span>
+        {onEditCost ? (
+          <EditableCost cost={cost} onCommit={onEditCost} />
+        ) : (
+          <span className="m" style={{ fontSize: 11, color: 'var(--cl-ink-3)' }}>cost {money(cost, 'USD')}</span>
+        )}
         <span className="m" style={{ flexShrink: 0, fontSize: 11, color: 'var(--cl-ink-3)' }}>
-          {qty} {unit}
+          {qty}{showUnit ? ` ${unit}` : ''}
         </span>
       </div>
     </div>
