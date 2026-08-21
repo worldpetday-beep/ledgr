@@ -18,7 +18,7 @@ import { CatalogEntryCard } from '../components/CatalogEntryCard'
 import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
 import { itemSearchMatches } from '../lib/itemMatch'
-import { sellUnitsOf, convertAmount } from '../lib/sellUnits'
+import { sellUnitsOf } from '../lib/sellUnits'
 import { priceStatsFor } from '../lib/priceStats'
 import { loadActiveDate, storeActiveDate } from '../lib/activeDate'
 import type { SellUnit } from '../db'
@@ -129,8 +129,6 @@ export default function Sell() {
   const variants = useLiveQuery(() => db.variants.toArray(), []) ?? []
   const salesRaw = useLiveQuery(() => db.sales.toArray(), []) ?? []
   const sales = useMemo(() => withoutVoided(salesRaw), [salesRaw])
-  const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
-  const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
 
   const productById = useMemo(() => new Map(products.map((p) => [p.id!, p])), [products])
   const qtySoldByVariant = useMemo(() => {
@@ -179,13 +177,10 @@ export default function Sell() {
         next[i] = { ...next[i], qty: next[i].qty + n }
         return next
       }
-      // A sale has one running currency, set by whichever unit is tapped
-      // first -- a later tap on a unit priced in the other currency still
-      // gets added, just converted into the cart's currency so the total/
-      // balance math downstream stays a single number instead of having
-      // to track two running totals at once.
-      const cartCurrency = prev[0]?.currency ?? c.unit.currency
-      const price = convertAmount(c.unit.price, c.unit.currency, cartCurrency, rate)
+      // Each line keeps its own native currency -- a sale can genuinely
+      // mix a $30 item with an L$1,900 item, and the Settle sheet's own
+      // per-line toggle can always override it further for this specific
+      // sale, so nothing gets silently converted here.
       return [
         ...prev,
         {
@@ -196,8 +191,8 @@ export default function Sell() {
           qty: n,
           unitType: c.unit.unit,
           factor: c.unit.factor,
-          price,
-          currency: cartCurrency,
+          price: c.unit.price,
+          currency: c.unit.currency,
           cost: c.variant.costPrice * c.unit.factor,
           tbs: false,
           stock: c.variant.stockMyShop + c.variant.stockVishalShop,
@@ -221,9 +216,13 @@ export default function Sell() {
     add({ key: `${productId}-${created.id}-0`, product, variant: created, unit, label: sellLabel(product.name, created.label) }, qty)
   }
 
-  const items = cart.reduce((s, l) => s + l.qty * l.price, 0)
+  // Bucketed by currency, never blended -- a cart can genuinely mix a $30
+  // item with an L$1,900 item now, and adding those raw numbers together
+  // would be exactly the "$1930" nonsense currency mixing is never
+  // supposed to produce.
+  const itemsUsd = cart.filter((l) => l.currency === 'USD').reduce((s, l) => s + l.qty * l.price, 0)
+  const itemsLrd = cart.filter((l) => l.currency === 'LRD').reduce((s, l) => s + l.qty * l.price, 0)
   const count = cart.reduce((s, l) => s + l.qty, 0)
-  const currency: Currency = cart[0]?.currency ?? 'USD'
 
   return (
     <div className="cl flex min-h-[calc(100dvh-6rem)] flex-col md:min-h-[calc(100dvh-2rem)]">
@@ -339,7 +338,11 @@ export default function Sell() {
           onClick={() => setSettleOpen(true)}
         >
           <span className="l">
-            <b className="m">{money(items, currency)}</b>
+            <b className="m">
+              {itemsUsd > 0 && money(itemsUsd, 'USD')}
+              {itemsUsd > 0 && itemsLrd > 0 && ' + '}
+              {(itemsLrd > 0 || itemsUsd <= 0) && money(itemsLrd, 'LRD')}
+            </b>
             <small>{count} item{count === 1 ? '' : 's'}</small>
           </span>
           <span className="go">Settle</span>
@@ -411,6 +414,11 @@ function SettleSheet({
 }) {
   const [location, setLocation] = useState<FulfillmentLocation>('myShop')
   const [deal, setDeal] = useState('')
+  // The reference currency "Agreed price" is negotiated in -- defaults to
+  // whatever the first cart line happens to be, but is always independently
+  // switchable: the agreed total and a line's own price can be in different
+  // currencies.
+  const [agreedCurrency, setAgreedCurrency] = useState<Currency>(cart[0]?.currency ?? 'USD')
   const [payU, setPayU] = useState('')
   const [payL, setPayL] = useState('')
   const [who, setWho] = useState('')
@@ -441,7 +449,6 @@ function SettleSheet({
 
   const rateRow = useLiveQuery(() => db.settings.get(EXCHANGE_RATE_KEY), [])
   const rate = rateRow ? Number(rateRow.value) : DEFAULT_EXCHANGE_RATE
-  const currency: Currency = cart[0]?.currency ?? 'USD'
 
   // Effective price for a line: the in-progress typed draft while its
   // price button is armed (it may never receive a real blur event on a
@@ -449,31 +456,40 @@ function SettleSheet({
   // updates left the agreed price visibly stuck on stale numbers), else
   // the last committed price.
   const effPrice = (l: CartLine) => (l.priceDraft !== undefined ? Number(l.priceDraft) || 0 : l.price)
-  const items = cart.reduce((s, l) => s + l.qty * effPrice(l), 0)
+  // "Items add up to" -- bucketed by each line's own currency, never
+  // blended into one figure unless every line happens to share one.
+  const itemsUsd = cart.filter((l) => l.currency === 'USD').reduce((s, l) => s + l.qty * effPrice(l), 0)
+  const itemsLrd = cart.filter((l) => l.currency === 'LRD').reduce((s, l) => s + l.qty * effPrice(l), 0)
+  const itemsInAgreedCurrency = agreedCurrency === 'USD' ? itemsUsd + itemsLrd / rate : itemsUsd * rate + itemsLrd
   // Line costs are always USD (see CatalogEntryCard) -- convert to the
-  // sale's own currency before comparing against/displaying alongside the
-  // agreed price, which is in that currency.
+  // agreed price's own currency before comparing against/displaying
+  // alongside it.
   const cogsUsd = cart.reduce((s, l) => s + l.qty * l.cost, 0)
-  const cogs = currency === 'USD' ? cogsUsd : cogsUsd * rate
-  const agreed = deal === '' ? items : Number(deal) || 0
+  const cogs = agreedCurrency === 'USD' ? cogsUsd : cogsUsd * rate
+  const agreed = deal === '' ? itemsInAgreedCurrency : Number(deal) || 0
   // What's been typed into the two payment boxes, converted into the
-  // sale's own currency so it's directly comparable to `agreed` -- payU/
-  // payL are two different currencies, not the sale currency itself, so
-  // this can't just be added to `agreed` without converting one side.
+  // agreed price's own currency so it's directly comparable to `agreed` --
+  // payU/payL are two different currencies, not necessarily the agreed
+  // currency itself, so this can't just be added to `agreed` without
+  // converting one side. The typed pair itself (payU/payL) is never
+  // altered by this -- it's exactly what gets recorded, this conversion
+  // only exists to compute the balance line.
   const paidUsdEquiv = (Number(payU) || 0) + (Number(payL) || 0) / rate
-  const paid = currency === 'USD' ? paidUsdEquiv : paidUsdEquiv * rate
+  const paid = agreedCurrency === 'USD' ? paidUsdEquiv : paidUsdEquiv * rate
   const bal = agreed - paid
   // LRD has no decimals in real use, so its rounding noise is on the order
   // of whole units, not cents -- a fixed 0.005 threshold would flag every
   // LRD sale as "owing" from float drift alone.
-  const balEps = currency === 'USD' ? 0.005 : 0.5
+  const balEps = agreedCurrency === 'USD' ? 0.005 : 0.5
   const owing = bal > balEps
   const tbsN = cart.filter((l) => l.tbs).length
 
   // Liberian dollars are always whole numbers here -- the armed field's
   // currency decides whether the "." key does anything. payL is always
-  // LRD; deal and per-line prices follow the cart's own currency.
-  const armedCurrency: Currency = focus === 'lrd' ? 'LRD' : focus === 'usd' ? 'USD' : currency
+  // LRD; deal follows the agreed price's currency; a per-line price
+  // follows that specific line's own currency.
+  const armedLine = focus.startsWith('l:') ? cart.find((l) => l.key === focus.slice(2)) : undefined
+  const armedCurrency: Currency = focus === 'lrd' ? 'LRD' : focus === 'usd' ? 'USD' : armedLine ? armedLine.currency : agreedCurrency
   const armedIsLrd = armedCurrency === 'LRD'
 
   function press(k: string) {
@@ -494,16 +510,17 @@ function SettleSheet({
 
   function rest(cur: 'usd' | 'lrd') {
     // Whatever's already sitting in the OTHER box, converted into the
-    // sale's currency so it can be subtracted from `agreed` directly.
+    // agreed price's own currency so it can be subtracted from `agreed`
+    // directly.
     const otherUsdEquiv = cur === 'usd' ? (Number(payL) || 0) / rate : Number(payU) || 0
-    const otherInSaleCurrency = currency === 'USD' ? otherUsdEquiv : otherUsdEquiv * rate
-    const remainingInSaleCurrency = Math.max(0, agreed - otherInSaleCurrency)
+    const otherInAgreedCurrency = agreedCurrency === 'USD' ? otherUsdEquiv : otherUsdEquiv * rate
+    const remainingInAgreedCurrency = Math.max(0, agreed - otherInAgreedCurrency)
     if (cur === 'usd') {
-      const usdVal = currency === 'USD' ? remainingInSaleCurrency : remainingInSaleCurrency / rate
+      const usdVal = agreedCurrency === 'USD' ? remainingInAgreedCurrency : remainingInAgreedCurrency / rate
       setPayU(usdVal ? usdVal.toFixed(2) : '')
       setFocus('usd')
     } else {
-      const lrdVal = currency === 'LRD' ? remainingInSaleCurrency : remainingInSaleCurrency * rate
+      const lrdVal = agreedCurrency === 'LRD' ? remainingInAgreedCurrency : remainingInAgreedCurrency * rate
       setPayL(lrdVal ? String(Math.round(lrdVal)) : '')
       setFocus('lrd')
     }
@@ -513,31 +530,48 @@ function SettleSheet({
     if (agreed <= 0 || saving) return
     setSaving(true)
     const timestamp = past ? new Date(`${date}T12:00:00`).getTime() : Date.now()
-    const totalQty = cart.reduce((s, l) => s + l.qty, 0) || cart.length
-    // Round each line's slice of the agreed total (and of what was actually
-    // paid) to whole LRD or 2dp USD, whichever the sale currency is --
-    // matches how the totals themselves are shown, and keeps every line
-    // individually well-formed rather than carrying stray fractional LRD.
-    const roundAmt = (n: number) => (currency === 'LRD' ? Math.round(n) : Math.round(n * 100) / 100)
-    // Never record more paid than was agreed -- anything typed past the
-    // agreed price is change handed back, not money owed against this sale.
-    const totalPaid = Math.min(agreed, Math.max(0, paid))
+    const roundAmt = (n: number, cur: Currency) => (cur === 'LRD' ? Math.round(n) : Math.round(n * 100) / 100)
+    // A manual "Agreed price" override (deal !== '') can differ from the
+    // natural sum of line prices -- applied as one uniform scale factor to
+    // every line's own native price, so a discount/markup lands
+    // proportionally across lines without forcing them into one currency.
+    const scaleFactor = itemsInAgreedCurrency > 0 ? agreed / itemsInAgreedCurrency : 1
+    // Exactly what was typed into the two payment fields -- the source of
+    // truth for what this sale actually collected. Never capped at
+    // `agreed`: if it's more, that's change handed back, not a reason to
+    // silently shrink the recorded payment.
+    const typedPayU = Math.max(0, Number(payU) || 0)
+    const typedPayL = Math.max(0, Number(payL) || 0)
+    // Each line's share of both the agreed total and the typed payment,
+    // weighted by that line's own value converted into the agreed
+    // currency -- lets lines in different currencies split one payment
+    // pair proportionally.
+    const weightOf = (l: CartLine) => {
+      const v = effPrice(l) * l.qty
+      if (l.currency === agreedCurrency) return v
+      return agreedCurrency === 'USD' ? v / rate : v * rate
+    }
+    const totalWeight = cart.reduce((s, l) => s + weightOf(l), 0) || cart.length
+
     try {
       await db.transaction('rw', db.sales, db.variants, db.settings, async () => {
         const customerNumber = await reserveNextCustomerNumber()
         const orderNumber = await reserveNextOrderNumber()
-        let remaining = agreed
-        let remainingPaid = totalPaid
+        let remainingPayU = typedPayU
+        let remainingPayL = typedPayL
         for (let i = 0; i < cart.length; i++) {
           const l = cart[i]
           const isLast = i === cart.length - 1
-          const lineAgreed = isLast ? remaining : roundAmt(agreed * (l.qty / totalQty))
-          remaining -= lineAgreed
-          // This line's proportional share of what was actually collected --
-          // fully paid (linePaid === lineAgreed) unless the sale as a whole
-          // was left with a balance owing.
-          const linePaid = isLast ? remainingPaid : roundAmt(lineAgreed * (agreed > 0 ? totalPaid / agreed : 0))
-          remainingPaid -= linePaid
+          const share = totalWeight > 0 ? weightOf(l) / totalWeight : 1 / cart.length
+          const lineSoldFor = roundAmt(effPrice(l) * scaleFactor, l.currency)
+          const linePayU = isLast ? remainingPayU : roundAmt(typedPayU * share, 'USD')
+          remainingPayU -= linePayU
+          const linePayL = isLast ? remainingPayL : roundAmt(typedPayL * share, 'LRD')
+          remainingPayL -= linePayL
+          // This line's paidAmount (in its own currency) for owingOf() --
+          // derived from the real paidUsd/paidLrd pair above, not a
+          // separate number.
+          const linePaidInOwnCurrency = l.currency === 'USD' ? linePayU + linePayL / rate : linePayU * rate + linePayL
 
           await db.sales.add({
             productId: l.productId,
@@ -545,10 +579,12 @@ function SettleSheet({
             itemName: l.label,
             qty: l.qty,
             unitType: l.unitType,
-            soldFor: lineAgreed,
-            paidAmount: linePaid,
+            soldFor: lineSoldFor,
+            currency: l.currency,
+            paidAmount: roundAmt(linePaidInOwnCurrency, l.currency),
+            paidUsd: linePayU,
+            paidLrd: linePayL,
             costAtSale: l.cost * l.qty,
-            currency,
             rateAtSale: rate,
             timestamp,
             customerNumber,
@@ -580,16 +616,16 @@ function SettleSheet({
             // same Dexie transaction -- so it's included without having to
             // splice it in separately.
             const allForVariant = await db.sales.where('variantId').equals(l.variantId).toArray()
-            const stats = priceStatsFor(allForVariant.filter((s) => !s.voidedAt), l.variantId, l.unitType, currency)
+            const stats = priceStatsFor(allForVariant.filter((s) => !s.voidedAt), l.variantId, l.unitType, l.currency)
             const isBaseUnit = fresh.sellUnits == null || fresh.sellUnits.every((u) => u.unit !== l.unitType)
             if (isBaseUnit) {
               if (!fresh.sellPriceManual && stats.count > 0) {
-                await db.variants.update(l.variantId, { sellPrice: roundAmt(stats.avg), updatedAt: Date.now() })
+                await db.variants.update(l.variantId, { sellPrice: roundAmt(stats.avg, l.currency), updatedAt: Date.now() })
               }
             } else {
               const idx = (fresh.sellUnits ?? []).findIndex((u) => u.unit === l.unitType)
               if (idx >= 0 && !fresh.sellUnits![idx].manual && stats.count > 0) {
-                const nextUnits = fresh.sellUnits!.map((u, i) => (i === idx ? { ...u, price: roundAmt(stats.avg) } : u))
+                const nextUnits = fresh.sellUnits!.map((u, i) => (i === idx ? { ...u, price: roundAmt(stats.avg, l.currency) } : u))
                 await db.variants.update(l.variantId, { sellUnits: nextUnits, updatedAt: Date.now() })
               }
             }
@@ -645,36 +681,62 @@ function SettleSheet({
                   <span>{l.qty}</span>
                   <button onClick={() => setCart((prev) => prev.map((x) => (x.key === l.key ? { ...x, qty: x.qty + 1 } : x)))}>+</button>
                 </span>
-                <button
-                  className={`pz${focus === `l:${l.key}` ? ' arm' : ''}${l.price < l.cost ? ' under' : ''}`}
-                  onClick={() => setFocus(focus === `l:${l.key}` ? 'deal' : `l:${l.key}`)}
-                  onBlur={() => commitLinePrice(l.key)}
-                >
-                  {l.priceDraft !== undefined ? l.priceDraft || '0' : currency === 'LRD' ? String(Math.round(l.price)) : l.price.toFixed(2)}
-                </button>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button
+                    className={`pz${focus === `l:${l.key}` ? ' arm' : ''}${l.price < (l.currency === 'USD' ? l.cost : l.cost * rate) ? ' under' : ''}`}
+                    onClick={() => setFocus(focus === `l:${l.key}` ? 'deal' : `l:${l.key}`)}
+                    onBlur={() => commitLinePrice(l.key)}
+                  >
+                    {l.priceDraft !== undefined ? l.priceDraft || '0' : l.currency === 'LRD' ? String(Math.round(l.price)) : l.price.toFixed(2)}
+                  </button>
+                  {/* Per-line currency toggle -- a customer can want to pay
+                      this one item in the other currency without changing
+                      what the rest of the sale is priced in. */}
+                  <button
+                    onClick={() => setCart((prev) => prev.map((x) => (x.key === l.key ? { ...x, currency: x.currency === 'USD' ? 'LRD' : 'USD' } : x)))}
+                    style={{ fontSize: 10, fontWeight: 800, padding: '2px 5px', borderRadius: 5, border: '1px solid var(--cl-line)', color: l.currency === 'USD' ? 'var(--cl-usd)' : 'var(--cl-lrd)' }}
+                  >
+                    {l.currency}
+                  </button>
+                </span>
                 <button className="rm" onClick={() => setCart((prev) => prev.filter((x) => x.key !== l.key))}>✕</button>
               </div>
             ))}
           </div>
 
           <div className="deal">
-            <div className="r1"><span>Items add up to</span><span className="m">{money(items, currency)}</span></div>
+            <div className="r1">
+              <span>Items add up to</span>
+              <span className="m">
+                {itemsUsd > 0 && money(itemsUsd, 'USD')}
+                {itemsUsd > 0 && itemsLrd > 0 && ' + '}
+                {(itemsLrd > 0 || itemsUsd <= 0) && money(itemsLrd, 'LRD')}
+              </span>
+            </div>
             <div className="r2">
               <span className="lb">Agreed price</span>
-              <button className={`amt${focus === 'deal' ? ' arm' : ''}`} onClick={() => setFocus('deal')}>
-                {deal === '' ? (currency === 'LRD' ? String(Math.round(items)) : items.toFixed(2)) : deal || '0'}
-              </button>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button className={`amt${focus === 'deal' ? ' arm' : ''}`} onClick={() => setFocus('deal')}>
+                  {deal === '' ? (agreedCurrency === 'LRD' ? String(Math.round(itemsInAgreedCurrency)) : itemsInAgreedCurrency.toFixed(2)) : deal || '0'}
+                </button>
+                <button
+                  onClick={() => setAgreedCurrency((c) => (c === 'USD' ? 'LRD' : 'USD'))}
+                  style={{ fontSize: 11, fontWeight: 800, padding: '4px 7px', borderRadius: 6, border: '1px solid var(--cl-line)', color: agreedCurrency === 'USD' ? 'var(--cl-usd)' : 'var(--cl-lrd)' }}
+                >
+                  {agreedCurrency}
+                </button>
+              </span>
             </div>
-            {Math.abs(agreed - items) > balEps && (
+            {Math.abs(agreed - itemsInAgreedCurrency) > balEps && (
               <div className="disc">
-                {agreed < items ? `Knocked off ${money(items - agreed, currency)}` : `Added ${money(agreed - items, currency)}`}
+                {agreed < itemsInAgreedCurrency ? `Knocked off ${money(itemsInAgreedCurrency - agreed, agreedCurrency)}` : `Added ${money(agreed - itemsInAgreedCurrency, agreedCurrency)}`}
                 {' · '}
                 <span style={{ textDecoration: 'underline', cursor: 'pointer' }} onClick={() => setDeal('')}>reset</span>
               </div>
             )}
           </div>
           {agreed < cogs && (
-            <div className="warn"><span>⚠</span><span>Under what these goods cost you ({money(cogs, currency)}).</span></div>
+            <div className="warn"><span>⚠</span><span>Under what these goods cost you ({money(cogs, agreedCurrency)}).</span></div>
           )}
 
           {(owing || tbsN > 0) && (
@@ -697,7 +759,7 @@ function SettleSheet({
             <button onClick={() => { setPayU(''); setPayL('') }}>Clear</button>
           </div>
           <div className={`balr ${bal > balEps ? 'owe' : bal < -balEps ? 'chg' : 'ok'}`}>
-            {bal > balEps ? `Balance ${money(bal, currency)}` : bal < -balEps ? `Change ${money(-bal, currency)}` : 'Paid in full'}
+            {bal > balEps ? `Balance ${money(bal, agreedCurrency)}` : bal < -balEps ? `Change ${money(-bal, agreedCurrency)}` : 'Paid in full'}
           </div>
         </div>
 
@@ -715,7 +777,7 @@ function SettleSheet({
             ))}
           </div>
           <button className={`go2${owing ? ' credit' : ''}`} disabled={agreed <= 0 || saving} onClick={commit}>
-            {saving ? 'Recording…' : owing ? `Record · ${money(bal, currency)} owing` : past ? 'Record for this day' : 'Record sale'}
+            {saving ? 'Recording…' : owing ? `Record · ${money(bal, agreedCurrency)} owing` : past ? 'Record for this day' : 'Record sale'}
           </button>
         </div>
       </div>

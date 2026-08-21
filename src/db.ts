@@ -148,6 +148,16 @@ export interface Sale {
   // profit/most-sold aggregates everywhere, since the goods were already
   // counted as sold the day they actually left.
   isPayoff?: boolean
+  // The exact payment pair as typed into the Settle sheet's two payment
+  // fields -- nothing derived, nothing converted -- prorated across this
+  // order's lines so their sum matches exactly what was typed. This is
+  // what Book displays as the sale amount; soldFor/currency above remain
+  // the negotiation reference ("agreed price") used only to compute a
+  // balance, never shown as the total. Absent on sales recorded before
+  // this existed -- Book falls back to deriving an equivalent pair from
+  // soldFor/currency/secondaryAmount for those.
+  paidUsd?: number
+  paidLrd?: number
 }
 
 export interface Category {

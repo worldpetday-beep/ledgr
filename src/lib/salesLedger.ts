@@ -25,6 +25,19 @@ export function usdAmountOf(sale: Sale): number {
   return 0
 }
 
+// The exact pair Book displays as the sale's headline -- paidUsd/paidLrd
+// when present (every sale recorded going forward: exactly what was typed
+// into the Settle sheet's two payment fields, nothing derived). Sales
+// recorded before those fields existed fall back to the old soldFor/
+// currency/secondaryAmount model, which is the best available stand-in
+// for "what was paid" from that era.
+export function paidPairOf(sale: Sale): { usd: number; lrd: number } {
+  if (sale.paidUsd != null || sale.paidLrd != null) {
+    return { usd: sale.paidUsd ?? 0, lrd: sale.paidLrd ?? 0 }
+  }
+  return { usd: usdAmountOf(sale), lrd: lrdAmountOf(sale) }
+}
+
 // A single blended USD figure for one sale line, for aggregates (total
 // revenue, best-sellers, profit) that need one number to sum across a mix
 // of USD- and LRD-priced sales -- adding a $10 line and an L$4000 line

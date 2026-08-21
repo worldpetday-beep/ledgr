@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, DRAWER_OUT_KINDS, EXCHANGE_RATE_KEY, DEFAULT_EXCHANGE_RATE, type DrawerOut, type Currency } from '../db'
 import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
-import { owingUsd, paidLrdAmountOf, paidUsdAmountOf, saleValueUsd, withoutVoided } from '../lib/salesLedger'
+import { owingUsd, paidPairOf, saleValueUsd, withoutVoided } from '../lib/salesLedger'
 import { loadActiveDate, storeActiveDate } from '../lib/activeDate'
 import { DateCalendarPicker } from '../components/DateCalendarPicker'
 
@@ -119,8 +119,10 @@ export default function Drawer() {
   // case -- real cash in, but the goods themselves were already counted
   // sold the day they actually left, so it's excluded from goods sold.
   const goodsSold = daySales.filter((l) => !l.isPayoff).reduce((s, l) => s + saleValueUsd(l, rate), 0)
-  const inU = daySales.reduce((s, l) => s + paidUsdAmountOf(l), 0)
-  const inL = daySales.reduce((s, l) => s + paidLrdAmountOf(l), 0)
+  // Exactly what was typed into the Settle sheet's payment fields (same
+  // paidPairOf Book reads) -- not a derived/rounded figure.
+  const inU = daySales.reduce((s, l) => s + paidPairOf(l).usd, 0)
+  const inL = daySales.reduce((s, l) => s + paidPairOf(l).lrd, 0)
   const stillOwed = daySales.reduce((s, l) => s + owingUsd(l, rate), 0)
 
   // Drawer 1 -- the till. No opening float: it starts at zero every day,

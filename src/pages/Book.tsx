@@ -7,7 +7,7 @@ import { LedgerScanView } from '../components/LedgerScan'
 import { WarehouseLedgerView } from '../components/WarehouseLedger'
 import { InvoicePopup } from '../components/InvoicePopup'
 import { dateKeyMonrovia, formatShortDateMonrovia, formatTimeMonrovia, money } from '../lib/format'
-import { collectPayment, customerLabelOf, deleteSaleLine, lrdAmountOf, markSalePickedUp, owingOf, usdAmountOf, withoutVoided } from '../lib/salesLedger'
+import { collectPayment, customerLabelOf, deleteSaleLine, markSalePickedUp, owingOf, paidPairOf, withoutVoided } from '../lib/salesLedger'
 import { convertAmount } from '../lib/sellUnits'
 import { loadActiveDate, storeActiveDate } from '../lib/activeDate'
 import { DateCalendarPicker } from '../components/DateCalendarPicker'
@@ -47,12 +47,10 @@ interface OrderGroup {
   customerName?: string
   lines: Sale[]
   anyTbs: boolean
-  // The pair, exactly as typed/paid -- never merged into one number for
-  // display. `total` (converted, one number) exists only as a smaller,
-  // secondary figure underneath the real pair.
-  sumUsd: number
-  sumLrd: number
-  total: number
+  // The pair, exactly as typed/paid -- never merged into one number, both
+  // fields always shown even when one is zero.
+  paidUsd: number
+  paidLrd: number
   owing: number
   currency: Currency
   rateAtSale?: number
@@ -121,23 +119,24 @@ export default function Book() {
       customerName: lines.find((l) => l.customerName)?.customerName,
       lines,
       anyTbs: lines.some((l) => l.tbs),
-      // The pair as actually typed/paid, added straight across every line
-      // in the order -- shown as the card's headline, never blended.
-      sumUsd: lines.reduce((s, l) => s + usdAmountOf(l), 0),
-      sumLrd: lines.reduce((s, l) => s + lrdAmountOf(l), 0),
-      // A converted single number, only ever shown smaller/greyer beneath
-      // the real pair above -- naively adding soldFor + secondaryAmount
-      // together used to blend two different currencies into one raw
-      // number (e.g. "$50 + L$1000" read as "$1050"). Convert each side
-      // into the order's own currency, at the rate that was actually in
-      // effect for that line, before summing.
-      total: lines.reduce((s, l) => {
+      // The pair EXACTLY as typed/paid, added straight across every line in
+      // the order -- this is the card's headline, always both fields, never
+      // blended, never converted. paidPairOf reads paidUsd/paidLrd directly
+      // (falls back to the old soldFor-derived model for sales recorded
+      // before those fields existed).
+      paidUsd: lines.reduce((s, l) => s + paidPairOf(l).usd, 0),
+      paidLrd: lines.reduce((s, l) => s + paidPairOf(l).lrd, 0),
+      // Balance owing is the only place the "agreed" reference amount's
+      // value is used for display math -- shown in the currency the first
+      // line's agreed price was set in, each line's own owing amount
+      // converted into that one reference currency at the rate in effect
+      // when it was recorded, before summing (never blended raw).
+      owing: lines.reduce((s, l) => {
+        const owed = owingOf(l)
+        if (owed <= 0 || l.currency === lines[0].currency) return s + owed
         const lineRate = l.rateAtSale ?? rate
-        const usdPart = usdAmountOf(l)
-        const lrdPart = lrdAmountOf(l)
-        return s + convertAmount(usdPart, 'USD', lines[0].currency, lineRate) + convertAmount(lrdPart, 'LRD', lines[0].currency, lineRate)
+        return s + convertAmount(owed, l.currency, lines[0].currency, lineRate)
       }, 0),
-      owing: lines.reduce((s, l) => s + owingOf(l), 0),
       currency: lines[0].currency,
       rateAtSale: lines[0].rateAtSale,
     }))
@@ -329,24 +328,16 @@ export default function Book() {
 
           {days.map(([key, ss]) => {
             // The day's pair -- straight sum of every order's raw
-            // paidUSD/paidLRD, never blended -- with one converted USD
-            // total (at each order's own rate) shown small beneath.
-            const dayUsd = ss.reduce((s, o) => s + o.sumUsd, 0)
-            const dayLrd = ss.reduce((s, o) => s + o.sumLrd, 0)
-            const dayConverted = ss.reduce((s, o) => s + convertAmount(o.total, o.currency, 'USD', o.rateAtSale ?? rate), 0)
+            // paidUsd/paidLrd, both fields always shown, never blended.
+            const dayUsd = ss.reduce((s, o) => s + o.paidUsd, 0)
+            const dayLrd = ss.reduce((s, o) => s + o.paidLrd, 0)
             return (
             <div key={key}>
               <div className="day" style={{ alignItems: 'flex-start' }}>
                 <span className="d">{dayLabel(key)}</span>
                 <span style={{ textAlign: 'right' }}>
-                  {dayUsd <= 0 && dayLrd <= 0 && <span className="t m">{money(0, 'USD')}</span>}
-                  {dayUsd > 0 && <span className="t m" style={{ display: 'block' }}>{money(dayUsd, 'USD')}</span>}
-                  {dayLrd > 0 && <span className="t m" style={{ display: 'block' }}>{dayUsd > 0 ? '+ ' : ''}{money(dayLrd, 'LRD')}</span>}
-                  {(dayUsd > 0 || dayLrd > 0) && (
-                    <span className="m" style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--cl-ink-3)' }}>
-                      {money(dayConverted, 'USD')} total
-                    </span>
-                  )}
+                  <span className="t m" style={{ display: 'block' }}>{money(dayUsd, 'USD')}</span>
+                  <span className="t m" style={{ display: 'block' }}>+ {money(dayLrd, 'LRD')}</span>
                 </span>
               </div>
               {ss.map((order) => {
@@ -384,21 +375,26 @@ export default function Book() {
                           </span>
                         ))}
                       </div>
-                      {/* The pair as actually paid -- headline, green, never
-                          blended -- with the converted single number small
-                          and grey beneath it as a secondary reference only. */}
+                      {/* The pair exactly as typed -- headline, green, never
+                          blended -- BOTH fields always shown, even a zero
+                          one, so it's unambiguous what was actually paid in
+                          each currency. If there's a balance owing, that's
+                          its own separate line below, not folded in here. */}
                       <span style={{ flexShrink: 0, textAlign: 'right' }}>
                         <span className="m" style={{ display: 'block', fontSize: 15, fontWeight: 700, color: 'var(--cl-usd)' }}>
-                          {order.sumUsd > 0 && money(order.sumUsd, 'USD')}
-                          {order.sumUsd > 0 && order.sumLrd > 0 && <br />}
-                          {order.sumLrd > 0 && money(order.sumLrd, 'LRD')}
-                          {order.sumUsd <= 0 && order.sumLrd <= 0 && money(0, order.currency)}
+                          {money(order.paidUsd, 'USD')}
                         </span>
-                        <span className="m" style={{ display: 'block', fontSize: 10.5, fontWeight: 500, color: 'var(--cl-ink-3)', marginTop: 2 }}>
-                          {money(order.total, order.currency)} total
+                        <span className="m" style={{ display: 'block', fontSize: 15, fontWeight: 700, color: 'var(--cl-usd)' }}>
+                          + {money(order.paidLrd, 'LRD')}
                         </span>
                       </span>
                     </div>
+
+                    {order.owing > 0.005 && (
+                      <div style={{ marginTop: 4, fontSize: 12, fontWeight: 600, color: 'var(--cl-alarm)' }}>
+                        Balance owing: {money(order.owing, order.currency)}
+                      </div>
+                    )}
 
                     {(isPayoff || anyPendingPickup || anyPickedUp || order.owing > 0.005) && (
                       <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6 }}>
