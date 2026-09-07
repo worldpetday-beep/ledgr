@@ -278,6 +278,20 @@ export default function Drawer() {
           ))}
           <button className="btn ghost" onClick={addTillOut}>+ Add money out</button>
 
+          <p className="eb" style={{ marginTop: 14 }}>Mobile Money<span className="n"> — kept separate from the till/safe, never physically in either</span></p>
+          <div className="card">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
+              <div>
+                <label className="lab">MoMo USD</label>
+                <input className="in m" inputMode="decimal" placeholder="0.00" value={rec?.momoUsd || ''} onChange={(e) => upsert({ momoUsd: Number(e.target.value) || 0 })} />
+              </div>
+              <div>
+                <label className="lab">MoMo LRD</label>
+                <input className="in m" inputMode="decimal" placeholder="0" value={rec?.momoLrd || ''} onChange={(e) => upsert({ momoLrd: Number(e.target.value) || 0 })} />
+              </div>
+            </div>
+          </div>
+
           <p className="eb" style={{ marginTop: 14 }}>Count the till</p>
           <div className="card">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>

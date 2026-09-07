@@ -224,6 +224,26 @@ export interface DrawerCount {
   sweptUsd?: number
   sweptLrd?: number
   safeOuts?: DrawerOut[]
+
+  // Mobile Money collected this day -- its own figure, deliberately kept
+  // out of the till/safe cash totals above (it never physically sits in
+  // either drawer).
+  momoUsd?: number
+  momoLrd?: number
+}
+
+// A remembered mapping from a spoken/typed shorthand phrase to the
+// product/variant it actually means -- built from corrections the owner
+// makes on the Voice Entry review screen, so the same shorthand resolves
+// faster and more confidently next time instead of needing "needs input"
+// every time.
+export interface VoiceCorrection {
+  id?: number
+  phrase: string // normalized (lowercased, trimmed) raw phrase Claude couldn't confidently match
+  productId: number
+  variantId: number
+  count: number // how many times this exact correction has been confirmed
+  lastUsed: number
 }
 
 export type WarehouseLedgerDirection = 'in' | 'out' // in = received from source; out = sent to source
@@ -253,6 +273,7 @@ export const db = new Dexie('LedgrDB') as Dexie & {
   warehouseLedger: EntityTable<WarehouseLedgerEntry, 'id'>
   abbreviations: EntityTable<AbbreviationRule, 'id'>
   customUnits: EntityTable<CustomUnit, 'id'>
+  voiceCorrections: EntityTable<VoiceCorrection, 'id'>
 }
 
 db.version(1).stores({
@@ -544,6 +565,18 @@ db.version(15)
         delete p.folderId
       })
   })
+
+// v16: new table for the Voice Entry feature's corrections memory --
+// additive only, nothing existing is touched.
+db.version(16).stores({
+  voiceCorrections: '++id, phrase, productId, variantId',
+})
+
+// The deployed Cloudflare Worker's URL (e.g.
+// "https://ledgr-voice-worker.<subdomain>.workers.dev") -- set once in
+// Numbers -> Setup -> Voice entry. The app never calls Claude directly;
+// this Worker is the only thing holding the API key.
+export const VOICE_WORKER_URL_KEY = 'voiceWorkerUrl'
 
 export const NEXT_ORDER_NUMBER_KEY = 'nextOrderNumber'
 export const ORDER_NUMBER_BASE = 1000

@@ -15,6 +15,7 @@ import {
 } from '../db'
 import { AddProductFastEntryModal } from '../components/AddProductFastEntryModal'
 import { CatalogEntryCard } from '../components/CatalogEntryCard'
+import { VoiceEntrySheet } from '../components/VoiceEntrySheet'
 import { money, dateKeyMonrovia, formatShortDateMonrovia } from '../lib/format'
 import { withoutVoided } from '../lib/salesLedger'
 import { itemSearchMatches } from '../lib/itemMatch'
@@ -35,7 +36,11 @@ interface Candidate {
   label: string
 }
 
-interface CartLine {
+// Exported so Voice Entry (a completely different way of building a cart)
+// can hand off a resolved list of lines into this exact same shape --
+// Voice Entry never commits anything itself, it just stages a cart and
+// opens the same SettleSheet manual entry uses.
+export interface CartLine {
   key: string
   productId: number
   variantId: number
@@ -100,6 +105,7 @@ export default function Sell() {
   const [datePicker, setDatePicker] = useState(false)
   const [adding, setAdding] = useState<string | null>(null)
   const [settleOpen, setSettleOpen] = useState(false)
+  const [voiceOpen, setVoiceOpen] = useState(false)
   const keyboardInset = useKeyboardInset()
   const [date, setDateState] = useState(() => {
     const preset = (location.state as { presetDate?: string } | null)?.presetDate
@@ -233,9 +239,12 @@ export default function Sell() {
             {past ? `Backdated · ${formatShortDateMonrovia(new Date(`${date}T12:00:00`).getTime())} · every sale below goes on this day` : 'Today'}
           </div>
         </div>
-        <button className={`btn-s${past ? ' hot' : ''}`} onClick={() => setDatePicker(true)}>
-          {past ? '⚠ ' : ''}{date === todayKey ? 'Today' : formatShortDateMonrovia(new Date(`${date}T12:00:00`).getTime())}
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button className="btn-s" onClick={() => setVoiceOpen(true)} aria-label="Voice entry" title="Voice entry">🎤</button>
+          <button className={`btn-s${past ? ' hot' : ''}`} onClick={() => setDatePicker(true)}>
+            {past ? '⚠ ' : ''}{date === todayKey ? 'Today' : formatShortDateMonrovia(new Date(`${date}T12:00:00`).getTime())}
+          </button>
+        </div>
       </div>
 
       <div className="srch">
@@ -380,6 +389,21 @@ export default function Sell() {
       )}
 
       {adding !== null && <AddProductFastEntryModal onClose={() => setAdding(null)} onCreated={onProductCreated} />}
+
+      {voiceOpen && (
+        <VoiceEntrySheet
+          onClose={() => setVoiceOpen(false)}
+          onStage={(staged) => {
+            // Voice Entry never commits anything itself -- it stages a
+            // cart and opens the exact same Settle screen manual entry
+            // uses, so confirming a voice-parsed sale runs through
+            // identical code to typing it in by hand.
+            setCart((prev) => [...prev, ...staged])
+            setVoiceOpen(false)
+            setSettleOpen(true)
+          }}
+        />
+      )}
 
       {settleOpen && (
         <SettleSheet

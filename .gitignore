@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Cloudflare Worker (server/voice-worker) local state/secrets -- never commit
+.wrangler
+.dev.vars
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

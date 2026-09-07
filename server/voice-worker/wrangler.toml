@@ -1,0 +1,13 @@
+name = "ledgr-voice-worker"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Not sensitive -- just which site is allowed to call this Worker. Set the
+# real GitHub Pages origin (no trailing slash) after you know it, e.g.
+# "https://worldpetday-beep.github.io". Comma-separate if there's more
+# than one (e.g. a local dev origin too).
+[vars]
+ALLOWED_ORIGINS = "https://worldpetday-beep.github.io"
+
+# ANTHROPIC_API_KEY is set separately as a secret (see README.md) --
+# secrets never go in this file or in git.
